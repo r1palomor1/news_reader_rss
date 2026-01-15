@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V112.0
+// NEWS READER (RSS/ATOM) — V112.1
 // Protocol: v96.2 Engine 
-// Status: Pulse Tags Fixes (Thi/New blacklist)
+// Status: Fixed Bookmarks return navigation
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -66,6 +66,11 @@ const ITEMS_PER_PAGE = 25
 const scriptName = Script.name()
 const scriptUrl = `scriptable:///run/${encodeURIComponent(scriptName)}`
 const searchParam = SEARCH_TERM ? `&search=${encodeURIComponent(SEARCH_TERM)}` : ""
+
+// Save previous category when navigating to Bookmarks
+if (args.queryParameters.prevCat) {
+  fm.writeString(PREV_CAT_FILE, args.queryParameters.prevCat)
+}
 
 function getFirstTrueSource() {
   const firstEnabled = FEEDS.find(f => f.enabled)
@@ -511,7 +516,7 @@ async function renderReader() {
   </header>
 
   <div id="actionMenu">
-    ${CATEGORY === 'BOOKMARKS' ? `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(returnSource)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>` : `<div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS'" class="menu-item"><span class="material-icons-round text-orange-500">bookmarks</span><span>Bookmarks</span></div>`}
+    ${CATEGORY === 'BOOKMARKS' ? `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(returnSource)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>` : `<div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevCat=${encodeURIComponent(CATEGORY)}'" class="menu-item"><span class="material-icons-round text-orange-500">bookmarks</span><span>Bookmarks</span></div>`}
     <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value)" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
     <div onclick="openTagEditor()" class="menu-item"><span class="material-icons-round text-green-400">label</span><span>Tag Editor</span></div>
     <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
