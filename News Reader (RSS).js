@@ -1,0 +1,829 @@
+// Variables used by Scriptable.
+// These must be at the very top of the file. Do not edit.
+// icon-color: red; icon-glyph: magic;
+// =======================================
+// NEWS READER (RSS/ATOM) — V111.4
+// Protocol: v96.2 Engine 
+// Status: External Link, Bulk Tag Editor, Smart Quick Edit, Pulse Tags
+// =======================================
+
+const fm = FileManager.iCloud()
+const dir = fm.documentsDirectory()
+const CONFIG_FILE = fm.joinPath(dir, "global_news_feeds.json")
+const CAT_FILE = fm.joinPath(dir, "global_news_category.txt")
+const PREV_CAT_FILE = fm.joinPath(dir, "prev_category.txt")
+const HISTORY_FILE = fm.joinPath(dir, "read_history.json")
+const BOOKMARK_FILE = fm.joinPath(dir, "bookmarks.json")
+const CACHE_DIR = fm.joinPath(dir, "news_cache")
+const TOGGLE_FILE = fm.joinPath(dir, "unread_toggle.txt")
+const VISIT_FILE = fm.joinPath(dir, "last_visit.txt")
+const MASTER_FILE = fm.joinPath(dir, "master_titles.txt")
+// New Tag Editor Files
+const EXCLUSION_FILE = fm.joinPath(dir, "tag_exclusions.txt")
+const INCLUSION_FILE = fm.joinPath(dir, "tag_inclusions.txt")
+
+if (!fm.fileExists(CACHE_DIR)) fm.createDirectory(CACHE_DIR)
+
+async function getJsonFile(path) {
+  if (!fm.fileExists(path)) return []
+  if (fm.isFileStoredIniCloud(path)) await fm.downloadFileFromiCloud(path)
+  try { return JSON.parse(fm.readString(path)) } catch (e) { return [] }
+}
+
+function getTags(path) {
+  if (!fm.fileExists(path)) return []
+  return fm.readString(path)
+    .split(/[,\n]+/)
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+}
+
+function saveTags(path, tags) {
+  fm.writeString(path, tags.join("\n"))
+}
+
+function saveHistory(arr) { fm.writeString(HISTORY_FILE, JSON.stringify(arr)) }
+function saveBookmarks(arr) { fm.writeString(BOOKMARK_FILE, JSON.stringify(arr)) }
+
+let READ_HISTORY = await getJsonFile(HISTORY_FILE)
+let BOOKMARKS = await getJsonFile(BOOKMARK_FILE)
+let FEEDS = await getJsonFile(CONFIG_FILE)
+
+let savedCat = fm.fileExists(CAT_FILE) ? fm.readString(CAT_FILE) : "ALL SOURCES"
+let CATEGORY = FEEDS.some(f => f.name === savedCat) || ["ALL SOURCES", "BOOKMARKS"].includes(savedCat) ? savedCat : "ALL SOURCES"
+
+let SHOW_UNREAD_ONLY = fm.fileExists(TOGGLE_FILE) ? fm.readString(TOGGLE_FILE) === "true" : true
+if (args.queryParameters.toggleUnread) {
+  SHOW_UNREAD_ONLY = !SHOW_UNREAD_ONLY
+  fm.writeString(TOGGLE_FILE, String(SHOW_UNREAD_ONLY))
+}
+
+let APP_STATE = args.queryParameters.state || "READER"
+let SEARCH_TERM = args.queryParameters.search || ""
+let PAGE = parseInt(args.queryParameters.page) || 1
+const ITEMS_PER_PAGE = 25
+
+const scriptName = Script.name()
+const scriptUrl = `scriptable:///run/${encodeURIComponent(scriptName)}`
+const searchParam = SEARCH_TERM ? `&search=${encodeURIComponent(SEARCH_TERM)}` : ""
+
+function getFirstTrueSource() {
+  const firstEnabled = FEEDS.find(f => f.enabled)
+  return firstEnabled ? firstEnabled.name : "ALL SOURCES"
+}
+
+function getNewCutoffMs() {
+  const hour = new Date().getHours()
+  const windowHours = (hour < 12) ? 12 : 6
+  return windowHours * 60 * 60 * 1000
+}
+
+function getExpiryCutoffMs() { return 3 * 24 * 60 * 60 * 1000 }
+
+// --- MASTER FILE LOGIC ---
+
+async function generateMasterTitles() {
+  const files = fm.listContents(CACHE_DIR)
+  let masterContent = "SOURCE|TITLE|LINK|DATE\n"
+  for (const file of files) {
+    const path = fm.joinPath(CACHE_DIR, file)
+    const data = JSON.parse(fm.readString(path))
+    const unread = data.filter(item => !READ_HISTORY.includes(item.link))
+    unread.forEach(item => {
+      const cleanTitle = item.title.replace(/\|/g, "-")
+      masterContent += `${item.source}|${cleanTitle}|${item.link}|${item.date}\n`
+    })
+  }
+  fm.writeString(MASTER_FILE, masterContent)
+}
+
+// --- CORE UTILITIES ---
+
+function extract(b, tag) {
+  const m = b.match(new RegExp(`<${tag}[^>]*>(?:<!\\[CDATA\\[)?(.*?)(?:\\]\\]>)?</${tag}>`, "is"))
+  if (m) {
+    return m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/<[^>]+>/g, " ").replace(/\s+/g, ' ').trim()
+  }
+  if (tag === "link") {
+    const linkMatch = b.match(/<link [^>]*href=["']([^"']+)["']/)
+    return linkMatch ? linkMatch[1] : ""
+  }
+  return ""
+}
+
+async function fetchSingleFeed(url, name) {
+  const path = fm.joinPath(CACHE_DIR, name.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json")
+  const freshUrl = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`
+  const expiry = getExpiryCutoffMs()
+  try {
+    const req = new Request(freshUrl); req.timeoutInterval = 5;
+    const xml = await req.loadString()
+    const itemsRaw = xml.includes("<item") ? xml.split(/<item[^>]*>/).slice(1) : xml.split(/<entry[^>]*>/).slice(1)
+    const items = itemsRaw.map(b => {
+      return {
+        title: extract(b, "title"),
+        link: extract(b, "link"),
+        date: extract(b, "pubDate") || extract(b, "updated") || extract(b, "published"),
+        desc: extract(b, "description") || extract(b, "summary") || extract(b, "content"),
+        source: name
+      }
+    })
+    const filtered = items.filter(i => (Date.now() - new Date(i.date).getTime()) < expiry)
+    fm.writeString(path, JSON.stringify(filtered));
+    return filtered
+  } catch {
+    if (fm.fileExists(path)) {
+      const cached = JSON.parse(fm.readString(path))
+      return cached.filter(i => (Date.now() - new Date(i.date).getTime()) < expiry)
+    }
+    return []
+  }
+}
+
+async function syncAllFeeds() {
+  const hud = new WebView()
+  const enabledFeeds = FEEDS.filter(f => f.enabled)
+  const hudHtml = `<html><head><script src="https://cdn.tailwindcss.com"></script></head>
+    <body class="bg-[#0f172a] flex flex-col items-center justify-center h-full text-slate-100 font-sans">
+      <div class="animate-spin rounded-full h-20 w-20 border-t-4 border-blue-500 mb-10"></div>
+      <div id="status" class="text-4xl font-black text-white text-center px-6">Loading sources<span id="dots"></span></div>
+      <script>
+        let dots = 0;
+        setInterval(() => { dots = (dots + 1) % 4; document.getElementById('dots').innerText = ".".repeat(dots); }, 400);
+      </script>
+    </body></html>`
+  await hud.loadHTML(hudHtml); hud.present(false)
+  await Promise.all(enabledFeeds.map(f => fetchSingleFeed(f.url, f.name)));
+  await generateMasterTitles()
+  fm.writeString(VISIT_FILE, String(Date.now()))
+}
+
+// --- TAG EDITOR ACTIONS ---
+
+if (args.queryParameters.addPulseTag) {
+  const type = args.queryParameters.type
+  const tag = args.queryParameters.tag
+  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+
+  let tags = getTags(file)
+
+  // Add tag if not already present (case-insensitive)
+  if (!tags.some(t => t.toLowerCase() === tag.toLowerCase())) {
+    tags.push(tag)
+    saveTags(file, tags)
+  }
+
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}`); return
+}
+
+if (args.queryParameters.smartEditTags) {
+  const type = args.queryParameters.type
+  const input = args.queryParameters.input
+  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+
+  // Parse input for + (add) and - (remove) operations
+  const items = input.split(',').map(t => t.trim())
+  let toAdd = []
+  let toRemove = []
+
+  items.forEach(item => {
+    if (item.startsWith('+')) {
+      toAdd.push(item.substring(1).trim())
+    } else if (item.startsWith('-')) {
+      toRemove.push(item.substring(1).trim())
+    } else if (item.length > 0) {
+      toAdd.push(item) // Default to add if no prefix
+    }
+  })
+
+  // Load existing tags
+  let tags = getTags(file)
+
+  // Remove specified tags (case-insensitive)
+  if (toRemove.length > 0) {
+    tags = tags.filter(t => !toRemove.some(r => r.toLowerCase() === t.toLowerCase()))
+  }
+
+  // Add new tags (avoid duplicates, case-insensitive)
+  toAdd.forEach(tag => {
+    if (!tags.some(t => t.toLowerCase() === tag.toLowerCase())) {
+      tags.push(tag)
+    }
+  })
+
+  // Save back to file
+  saveTags(file, tags)
+
+  // Reload Tag Editor
+  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}`); return
+}
+
+if (args.queryParameters.addBulkTags) {
+  const type = args.queryParameters.type
+  const newTags = args.queryParameters.newTags
+  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+
+  // Get existing tags
+  let existingTags = getTags(file)
+
+  // Parse new tags (comma-separated)
+  let parsedNewTags = newTags.split(',').map(t => t.trim()).filter(t => t.length > 0)
+
+  // Append new tags to existing
+  let allTags = [...existingTags, ...parsedNewTags]
+
+  // Remove duplicates
+  allTags = allTags.filter((t, i, arr) => arr.indexOf(t) === i)
+
+  // Save back to file
+  saveTags(file, allTags)
+
+  // Reload Tag Editor
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}`); return
+}
+
+if (args.queryParameters.saveBulkTags) {
+  const type = args.queryParameters.type
+  const tagsText = args.queryParameters.tags
+  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+  const tags = tagsText.split('\n').map(t => t.trim()).filter(t => t.length > 0)
+  saveTags(file, tags)
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}`); return
+}
+
+if (args.queryParameters.saveTags) {
+  const type = args.queryParameters.type
+  const tagsText = args.queryParameters.tags
+  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+  const tags = tagsText.split('\n').map(t => t.trim()).filter(t => t.length > 0)
+  saveTags(file, tags)
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}`); return
+}
+
+if (args.queryParameters.addTag) {
+  const type = args.queryParameters.type
+  const val = args.queryParameters.val.trim()
+  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+  let tags = getTags(file)
+  if (!tags.includes(val)) tags.push(val)
+  saveTags(file, tags)
+  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}`); return
+}
+
+if (args.queryParameters.deleteTag) {
+  const type = args.queryParameters.type
+  const idx = parseInt(args.queryParameters.idx)
+  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+  let tags = getTags(file)
+  tags.splice(idx, 1)
+  saveTags(file, tags)
+  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=manage`); return
+}
+
+// --- STANDARD ACTION HANDLERS ---
+
+if (args.queryParameters.bulkRead) {
+  const links = JSON.parse(decodeURIComponent(args.queryParameters.bulkRead))
+  links.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) })
+  saveHistory(READ_HISTORY); Safari.open(scriptUrl + '?' + searchParam); return
+}
+
+if (args.queryParameters.refresh) {
+  const files = fm.listContents(CACHE_DIR);
+  files.forEach(f => fm.remove(fm.joinPath(CACHE_DIR, f)))
+  await syncAllFeeds(); Safari.open(scriptUrl + '?' + searchParam); return
+}
+
+if (args.queryParameters.bulkBookmark) {
+  const data = JSON.parse(decodeURIComponent(args.queryParameters.bulkBookmark))
+  data.forEach(item => { if (!BOOKMARKS.some(b => b.link === item.link)) BOOKMARKS.push(item) })
+  saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam); return
+}
+
+if (args.queryParameters.check) {
+  const url = args.queryParameters.check
+  if (!READ_HISTORY.includes(url)) {
+    READ_HISTORY.push(url); saveHistory(READ_HISTORY)
+    const bIdx = BOOKMARKS.findIndex(b => b.link === url)
+    if (bIdx > -1) {
+      BOOKMARKS.splice(bIdx, 1); saveBookmarks(BOOKMARKS);
+      if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
+    }
+    const isPlayAll = args.queryParameters.playall === "true"
+    const bulkList = args.queryParameters.bulkList || ""
+    const callback = encodeURIComponent(`${scriptUrl}?playall=${isPlayAll}${searchParam}${bulkList ? '&bulkList=' + bulkList : ''}`)
+    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`)
+    return
+  }
+}
+
+if (args.queryParameters.uncheck) {
+  const url = args.queryParameters.uncheck
+  const idx = READ_HISTORY.indexOf(url)
+  if (idx > -1) { READ_HISTORY.splice(idx, 1); saveHistory(READ_HISTORY) }
+  Safari.open(scriptUrl + '?' + searchParam); return
+}
+
+if (args.queryParameters.externalLink) {
+  const url = args.queryParameters.externalLink
+  Safari.openInApp(url); return
+}
+
+if (args.queryParameters.bookmark) {
+  const bLink = args.queryParameters.bookmark
+  const idx = BOOKMARKS.findIndex(b => b.link === bLink)
+  if (idx > -1) {
+    BOOKMARKS.splice(idx, 1)
+    if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
+  } else {
+    BOOKMARKS.push({ title: args.queryParameters.title, link: bLink, source: args.queryParameters.source, date: args.queryParameters.date, desc: args.queryParameters.desc })
+  }
+  saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam); return
+}
+
+if (args.queryParameters.externalLink) {
+  const url = args.queryParameters.externalLink
+  Safari.open(url); return
+}
+
+if (args.queryParameters.idx) {
+  const i = parseInt(args.queryParameters.idx)
+  if (args.queryParameters.delete && (await new Alert().addDestructiveAction("Delete") || true)) FEEDS.splice(i, 1)
+  if (args.queryParameters.move) {
+    const dir = args.queryParameters.move
+    if (dir === "up" && i > 0) [FEEDS[i], FEEDS[i - 1]] = [FEEDS[i - 1], FEEDS[i]]
+    else if (dir === "down" && i < FEEDS.length - 1) [FEEDS[i], FEEDS[i + 1]] = [FEEDS[i + 1], FEEDS[i]]
+  }
+  if (args.queryParameters.toggle) FEEDS[i].enabled = !FEEDS[i].enabled
+  if (args.queryParameters.edit) {
+    let a = new Alert(); a.title = "Edit Source"; a.addTextField("Name", FEEDS[i].name); a.addTextField("URL", FEEDS[i].url)
+    a.addAction("Save"); a.addCancelAction("Cancel")
+    if (await a.present() === 0) { FEEDS[i].name = a.textFieldValue(0); FEEDS[i].url = a.textFieldValue(1); delete FEEDS[i].validation; delete FEEDS[i].validated; delete FEEDS[i].format; }
+  }
+  fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS)); Safari.open(`${scriptUrl}?state=MANAGER`); return
+}
+
+// --- RENDERING ENGINES ---
+
+function formatDateTime(dateStr) {
+  let d = new Date(dateStr); if (isNaN(d.valueOf())) return dateStr
+  return `${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()]} ${d.getDate()} • ${d.getHours() % 12 || 12}:${d.getMinutes().toString().padStart(2, "0")} ${d.getHours() >= 12 ? "PM" : "AM"}`
+}
+
+// Handle reopening Tag Editor with fresh pulse tags
+if (args.queryParameters.reopenTagEditor) {
+  const mode = args.queryParameters.mode || 'exclude'
+  // Will fall through to renderReader which calculates pulse tags
+  // Then JavaScript will call openTagEditor() which passes them
+  APP_STATE = 'READER'
+  // Set a flag to auto-open Tag Editor after reader renders
+  const autoOpenTagEditor = true
+}
+
+async function renderReader() {
+  const lastVisit = fm.fileExists(VISIT_FILE) ? parseInt(fm.readString(VISIT_FILE)) : 0
+  const isStale = (Date.now() - lastVisit) > (10 * 60 * 1000)
+  if (fm.listContents(CACHE_DIR).length === 0 || isStale) await syncAllFeeds()
+
+  let CACHED_ITEMS = []
+  if (CATEGORY === "BOOKMARKS") { CACHED_ITEMS = [...BOOKMARKS] }
+  else if (CATEGORY === "ALL SOURCES") {
+    const files = fm.listContents(CACHE_DIR)
+    for (const file of files) { CACHED_ITEMS.push(...JSON.parse(fm.readString(fm.joinPath(CACHE_DIR, file)))) }
+  } else {
+    const path = fm.joinPath(CACHE_DIR, CATEGORY.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json")
+    CACHED_ITEMS = fm.fileExists(path) ? JSON.parse(fm.readString(path)) : []
+  }
+  CACHED_ITEMS.sort((a, b) => new Date(b.date) - new Date(a.date))
+
+  const pulseTags = (items) => {
+    let rawCounts = {};
+    let tagArticles = {}; // Track which articles match each tag
+    const userExclusions = new Set(getTags(EXCLUSION_FILE));
+    const userInclusions = getTags(INCLUSION_FILE);
+    const blacklist = new Set(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'Updated', 'News', 'Today', 'Breaking', 'Source', 'Photo', 'Video', 'Home', 'Page', 'Live', 'The', 'How', 'What', 'Why', 'Who', 'Where', 'When', 'This', 'That', 'And', 'But', 'For', 'With', 'From', 'Into', 'Their', 'Them', 'Your', 'They', 'Will', 'More', 'About', 'Annual', 'Transcript', 'Presents', 'Inc', 'Conference', 'Healthcare']);
+
+    const pool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? items.filter(i => !READ_HISTORY.includes(i.link)) : items;
+
+    pool.forEach(item => {
+      let titleWork = item.title;
+      const seenInThisItem = new Set();
+
+      // Priority 1: User Inclusions (e.g., YouTube)
+      userInclusions.forEach(phrase => {
+        if (titleWork.toLowerCase().includes(phrase.toLowerCase())) {
+          let masterKey = Object.keys(rawCounts).find(k => k.toLowerCase() === phrase.toLowerCase()) || phrase;
+          rawCounts[masterKey] = (rawCounts[masterKey] || 0) + 1;
+          seenInThisItem.add(masterKey.toLowerCase());
+          // Track article for this tag
+          if (!tagArticles[masterKey]) tagArticles[masterKey] = [];
+          tagArticles[masterKey].push(item.link);
+          // Remove to prevent regex from double-counting parts of the phrase
+          titleWork = titleWork.replace(new RegExp(phrase, 'gi'), " ");
+        }
+      });
+
+      // Priority 2: Standard Capitalization Logic
+      const regex = /(([A-Z][a-z0-9]*\.)*[A-Z][a-z0-9.']+(\\s+([A-Z][a-z0-9]*\.)*[A-Z][a-z0-9.']+)*)/g;
+      const matches = titleWork.match(regex) || [];
+      matches.forEach(phrase => {
+        let clean = phrase.trim().replace(/[.:,;]$/, "").replace(/'s$/i, "");
+        let root = clean;
+        if (clean.length > 3 && clean.toLowerCase().endsWith('s')) {
+          if (clean.toLowerCase().endsWith('ies')) root = clean.slice(0, -3) + 'y';
+          else if (!clean.toLowerCase().endsWith('ss')) root = clean.slice(0, -1);
+        }
+        const lowerRoot = root.toLowerCase();
+        if (blacklist.has(root) || userExclusions.has(root) || root.length < 3) return;
+        if (!seenInThisItem.has(lowerRoot)) {
+          let masterKey = Object.keys(rawCounts).find(k => k.toLowerCase() === lowerRoot);
+          if (masterKey) {
+            rawCounts[masterKey]++;
+            tagArticles[masterKey].push(item.link);
+          } else {
+            rawCounts[root] = 1;
+            tagArticles[root] = [item.link];
+          }
+          seenInThisItem.add(lowerRoot);
+        }
+      });
+    });
+    return {
+      tags: Object.entries(rawCounts).filter(e => e[1] >= 3).sort((a, b) => b[1] - a[1]).slice(0, 12),
+      articles: tagArticles
+    };
+  };
+
+  const pulseData = pulseTags(CACHED_ITEMS);
+  const pulseTagsList = pulseData.tags;
+  const pulseTagArticles = pulseData.articles;
+  const heatThreshold = (CATEGORY === "ALL SOURCES") ? 8 : 4;
+  let filteredPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
+  const totalCount = filteredPool.length;
+  const startIdx = (PAGE - 1) * ITEMS_PER_PAGE;
+  const returnSource = fm.fileExists(PREV_CAT_FILE) ? fm.readString(PREV_CAT_FILE) : "ALL SOURCES";
+  const newCutoff = getNewCutoffMs();
+
+  let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>
+  body { font-family: ui-sans-serif; background-color: #0f172a; color: #f1f5f9; -webkit-user-select: none; scroll-behavior: smooth; } 
+  .glass { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); background: rgba(15, 23, 42, 0.85); border-bottom: 1px solid #1e293b; } 
+  .hidden-card { display: none !important; }
+  .highlight-card { border: 1.5px solid #3b82f6 !important; box-shadow: 0 0 12px rgba(59, 130, 246, 0.15); }
+  .pulse-pill { scroll-snap-align: start; flex-shrink: 0; }
+  .bulk-check { -webkit-appearance: none; width: 22px; height: 22px; border: 1.5px solid #475569; border-radius: 6px; position: relative; }
+  .bulk-check:checked { background-color: #2563eb; border-color: #2563eb; }
+  .bulk-check:checked::after { content: 'check'; font-family: 'Material Icons Round'; position: absolute; color: white; font-size: 16px; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+  #actionMenu { display: none; position: fixed; top: 55px; right: 20px; width: 200px; border-radius: 12px; overflow: hidden; z-index: 1000; box-shadow: 0 10px 25px rgba(0,0,0,0.2); border: 1px solid #334155; background: #1e293b; }
+  .menu-item { padding: 12px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; font-size: 14px; font-weight: 500; border-bottom: 1px solid #334155; }
+</style></head>
+<body class="pb-32">
+  <header class="fixed top-0 left-0 right-0 z-40 glass">
+    <div class="px-5 pt-3 pb-2 flex justify-between items-center">
+      <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value)">
+        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${CATEGORY} ▼</h1>
+        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} ${CATEGORY === 'BOOKMARKS' ? 'Saved' : (SHOW_UNREAD_ONLY ? 'Unread' : 'ALL ITEMS')}</span>
+      </div>
+      <div class="flex gap-4 items-center">
+        <button id="playBtn" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
+        <button onclick="toggleMenu(event)" class="p-1"><span class="material-icons-round ${SHOW_UNREAD_ONLY ? 'text-slate-500' : 'text-red-500'}">more_vert</span></button>
+      </div>
+    </div>
+    <div class="px-4 pb-2 relative">
+      <div class="relative flex items-center">
+        <span class="material-icons-round absolute left-3 text-slate-500 text-sm">search</span>
+        <input type="search" id="searchInput" oninput="filterNews()" value="${SEARCH_TERM}" placeholder="Search for topics or -exclude keywords" class="w-full bg-slate-900/50 border border-slate-700 rounded-lg py-2 pl-10 pr-10 text-[15px] focus:outline-none focus:border-blue-500 text-slate-100">
+        <span id="clearSearch" onclick="clearSearchBar()" class="material-icons-round absolute right-3 text-slate-400 text-sm cursor-pointer ${SEARCH_TERM ? '' : 'hidden'}">close</span>
+      </div>
+    </div>
+    <div class="flex overflow-x-auto px-4 pb-3 gap-2 no-scrollbar" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
+      ${pulseTagsList.map(([tag, count]) => {
+    const isHot = count >= heatThreshold;
+    return `<div onclick="setPulseSearch('${tag}')" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap">
+          <span class="text-[11px] font-bold text-blue-400">${isHot ? '🔥 ' : ''}${tag}</span>
+          <span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span>
+        </div>`
+  }).join('')}
+    </div>
+  </header>
+
+  <div id="actionMenu">
+    ${CATEGORY === 'BOOKMARKS' ? `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(returnSource)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>` : `<div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS'" class="menu-item"><span class="material-icons-round text-orange-500">bookmarks</span><span>Bookmarks</span></div>`}
+    <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value)" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
+    <div onclick="openTagEditor()" class="menu-item"><span class="material-icons-round text-green-400">label</span><span>Tag Editor</span></div>
+    <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
+    <div onclick="window.location.href='${scriptUrl}?refresh=true'" class="menu-item"><span class="material-icons-round text-slate-400">refresh</span><span>Refresh All</span></div>
+  </div>
+
+  <main id="newsContainer" class="pt-44 px-4 space-y-3">
+  ${filteredPool.map((item, idx) => {
+    const hasRead = READ_HISTORY.includes(item.link); const isB = BOOKMARKS.some(b => b.link === item.link);
+    const isNew = (new Date() - new Date(item.date)) < newCutoff;
+    return `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${item.title.toLowerCase()}" data-link="${item.link}" data-title="${item.title}" data-source="${item.source}" data-date="${item.date}" data-desc="${item.desc || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
+      <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check" onchange="updateBulkBar()"></div>
+      <div class="px-4 pt-4 pb-2">
+        <div class="flex justify-between items-baseline mb-1.5">
+          <div class="flex items-center gap-2"><span class="text-[12px] font-bold uppercase text-blue-500">${item.source}</span>${isNew ? '<span class="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-black tracking-tighter">NEW</span>' : ''}</div>
+          <span class="text-[12px] font-medium text-slate-400 uppercase mr-10">${formatDateTime(item.date)}</span>
+        </div>
+        <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10">${item.title}</h2>
+        <p class="text-[13px] text-slate-400 mt-1 leading-snug line-clamp-2 pr-4">${item.desc || ''}</p>
+        <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
+          <div class="flex gap-6">
+            <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'check'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
+            <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isB ? 'text-orange-500' : 'text-slate-400'}">${isB ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isB ? 'text-orange-500' : 'text-slate-400'}">Save</span></div>
+          </div>
+          <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(item.link)}&search=${encodeURIComponent(SEARCH_TERM)}" class="material-icons-round text-xl">link</a></div>
+        </div>
+      </div>
+    </article>`}).join('')}
+    <div id="paginationControls" class="flex justify-center items-center gap-12 py-8 text-slate-500">
+      ${PAGE > 1 ? `<a href="${scriptUrl}?page=${PAGE - 1}${searchParam}" class="material-icons-round text-3xl">chevron_left</a>` : `<span class="material-icons-round text-3xl opacity-20">chevron_left</span>`}
+      <span class="text-xs font-bold uppercase tracking-widest">Page ${PAGE}</span>
+      ${startIdx + ITEMS_PER_PAGE < totalCount ? `<a href="${scriptUrl}?page=${PAGE + 1}${searchParam}" class="material-icons-round text-3xl">chevron_right</a>` : `<span class="material-icons-round text-3xl opacity-20">chevron_right</span>`}
+    </div>
+  </main>
+  <div id="bulkBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass border border-slate-700 rounded-full px-6 py-3 hidden flex items-center gap-8 shadow-2xl z-50">
+     <button onclick="bulkPlay()" class="flex flex-col items-center"><span class="material-icons-round text-blue-500">volume_up</span><span class="text-[9px] uppercase font-bold text-blue-500">Listen</span></button>
+     <button onclick="bulkBookmark()" class="flex flex-col items-center"><span class="material-icons-round text-orange-500">star</span><span class="text-[9px] uppercase font-bold text-orange-500">Save</span></button>
+     <button onclick="bulkRead()" class="flex flex-col items-center"><span class="material-icons-round text-green-500">check_circle</span><span class="text-[9px] uppercase font-bold text-green-500">Read</span></button>
+     <div class="h-6 w-[1px] bg-slate-700"></div>
+     <button onclick="clearSelection()" class="material-icons-round text-slate-400">close</button>
+  </div>
+<script>
+  let xDown = null, yDown = null;
+  const START_IDX = ${startIdx}; const BASE_TOTAL = ${totalCount};
+  
+  function toggleMenu(e) { e.stopPropagation(); const m = document.getElementById('actionMenu'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; }
+  window.addEventListener('click', () => { document.getElementById('actionMenu').style.display = 'none'; });
+  function setPulseSearch(tag) { document.getElementById('searchInput').value = tag; filterNews(); }
+  function openTagEditor(targetMode) {
+    const pulseData = encodeURIComponent(JSON.stringify(${JSON.stringify(pulseTagsList)}));
+    const mode = targetMode || 'exclude';
+    window.location.href = '${scriptUrl}?state=TAG_EDITOR&mode=' + mode + '&pulseTags=' + pulseData;
+  }
+  function handleTouchStart(evt) { xDown = evt.touches[0].clientX; yDown = evt.touches[0].clientY; }
+  function handleSwipe(evt, el) { if (!xDown || !yDown) return; let xDiff = xDown - evt.changedTouches[0].clientX; let yDiff = yDown - evt.changedTouches[0].clientY; if (Math.abs(xDiff) > 80 && Math.abs(xDiff) > Math.abs(yDiff)) executeAction(el, xDiff > 0 ? 'bookmark' : 'check'); xDown = null; yDown = null; }
+  function executeAction(el, type) { const card = el.closest('.news-card'); const search = encodeURIComponent(document.getElementById('searchInput').value); const params = \`search=\${search}&page=${PAGE}&title=\${encodeURIComponent(card.dataset.title)}&source=\${encodeURIComponent(card.dataset.source)}&date=\${encodeURIComponent(card.dataset.date)}&desc=\${encodeURIComponent(card.dataset.desc)}\`; window.location.href = \`${scriptUrl}?\${type}=\${encodeURIComponent(card.dataset.link)}&\${params}\`; }
+  function filterNews() {
+    const query = document.getElementById('searchInput').value.toLowerCase().trim();
+    const clearBtn = document.getElementById('clearSearch');
+    if (query) { clearBtn.classList.remove('hidden'); } else { clearBtn.classList.add('hidden'); }
+    const cards = document.querySelectorAll('.news-card');
+    const pagControls = document.getElementById('paginationControls');
+    const headerSub = document.getElementById('headerSub');
+    if (!query) { cards.forEach(card => { const idx = parseInt(card.dataset.index); card.classList.toggle('hidden-card', !(idx >= START_IDX && idx < START_IDX + 25)); card.classList.remove('highlight-card'); }); pagControls.style.display = 'flex'; headerSub.innerText = BASE_TOTAL + " Items"; return; }
+    pagControls.style.display = 'none'; const terms = query.split(/\\s+/); const includes = terms.filter(t => !t.startsWith('-')); const excludes = terms.filter(t => t.startsWith('-')).map(t => t.substring(1));
+    let visibleCount = 0;
+    cards.forEach(card => {
+      const text = card.dataset.search;
+      const isMatch = includes.every(term => { const escaped = term.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'); const regex = new RegExp('(\\\\b|\\\\s|^)' + escaped + '(s)?(\\\\b|\\\\s|$)', 'i'); return regex.test(text); }) && !excludes.some(term => { const escaped = term.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'); const regex = new RegExp('(\\\\b|\\\\s|^)' + escaped + '(s)?(\\\\b|\\\\s|$)', 'i'); return regex.test(text); });
+      card.classList.toggle('hidden-card', !isMatch); card.classList.toggle('highlight-card', isMatch && includes.length > 0); if (isMatch) visibleCount++;
+    });
+    headerSub.innerText = visibleCount + " Matches";
+  }
+  function updateBulkBar() { const checked = document.querySelectorAll('.bulk-check:checked'); const bar = document.getElementById('bulkBar'); if (checked.length > 0) { bar.classList.remove('hidden'); bar.classList.add('flex'); } else { bar.classList.add('hidden'); bar.classList.remove('flex'); } }
+  function bulkRead() { const links = Array.from(document.querySelectorAll('.bulk-check:checked')).map(cb => cb.closest('.news-card').dataset.link); const search = encodeURIComponent(document.getElementById('searchInput').value); window.location.href = \`${scriptUrl}?bulkRead=\${encodeURIComponent(JSON.stringify(links))}&search=\${search}&page=${PAGE}\`; }
+  function bulkPlay() { window.location.href = '${scriptUrl}?playall=true&bulkList=' + encodeURIComponent(Array.from(document.querySelectorAll('.bulk-check:checked')).map(cb => cb.closest('.news-card').dataset.link).join(',')) + '&page=${PAGE}'; }
+  function bulkBookmark() { window.location.href = '${scriptUrl}?bulkBookmark=' + encodeURIComponent(JSON.stringify(Array.from(document.querySelectorAll('.bulk-check:checked')).map(cb => { const d = cb.closest('.news-card').dataset; return { title: d.title, link: d.link, source: d.source, date: d.date, desc: d.desc }; }))) + '&page=${PAGE}'; }
+  function clearSelection() { document.querySelectorAll('.bulk-check').forEach(cb => cb.checked = false); updateBulkBar(); }
+  function clearSearchBar() { document.getElementById('searchInput').value = ''; document.getElementById('clearSearch').classList.add('hidden'); filterNews(); }
+  filterNews();
+  ${args.queryParameters.reopenTagEditor ? `setTimeout(() => { openTagEditor('${args.queryParameters.mode || 'exclude'}'); }, 100);` : ''}
+</script></body></html>`
+  const wv = new WebView(); await wv.loadHTML(html); await wv.present();
+}
+
+async function renderTagEditor() {
+  const mode = args.queryParameters.mode || 'exclude'
+  const exclusions = getTags(EXCLUSION_FILE)
+  const inclusions = getTags(INCLUSION_FILE)
+
+  // Load current tags as comma-separated for display
+  const currentTags = mode === 'exclude' ? exclusions.join(', ') : inclusions.join(', ')
+
+  // Receive pulse tags from URL parameter (passed from main reader)
+  let pulseTagsList = []
+  if (args.queryParameters.pulseTags) {
+    try {
+      pulseTagsList = JSON.parse(args.queryParameters.pulseTags)
+    } catch (e) {
+      pulseTagsList = []
+    }
+  }
+
+  const heatThreshold = (CATEGORY === "ALL SOURCES") ? 8 : 4;
+
+  let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>body { background-color: #0f172a; color: #f1f5f9; } .pulse-pill { scroll-snap-align: start; flex-shrink: 0; }</style></head>
+  <body class="p-6">
+    <div class="flex justify-between items-center mb-6">
+      <h1 class="text-xl font-black text-green-400 uppercase tracking-tight">Tag Editor</h1>
+      <a href="${scriptUrl}?state=READER" class="material-icons-round text-slate-400">close</a>
+    </div>
+
+    <div class="flex justify-center bg-slate-900 p-3 rounded-xl mb-6 border border-slate-800 gap-6">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="radio" name="mode" value="exclude" ${mode === 'exclude' ? 'checked' : ''} onchange="switchMode()" class="w-4 h-4 text-red-500">
+        <span class="text-sm font-bold uppercase ${mode === 'exclude' ? 'text-red-500' : 'text-slate-500'}">Exclude</span>
+      </label>
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="radio" name="mode" value="include" ${mode === 'include' ? 'checked' : ''} onchange="switchMode()" class="w-4 h-4 text-blue-500">
+        <span class="text-sm font-bold uppercase ${mode === 'include' ? 'text-blue-500' : 'text-slate-500'}">Include</span>
+      </label>
+    </div>
+
+    ${pulseTagsList.length > 0 ? `<div class="mb-4">
+      <label class="text-[11px] text-slate-400 uppercase mb-2 block">Trending in your feed (tap to ${mode === 'exclude' ? 'exclude' : 'include'}):</label>
+      <div class="flex overflow-x-auto gap-2 pb-2" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
+        ${pulseTagsList.map(([tag, count]) => {
+    const isHot = count >= heatThreshold;
+    return `<a href="${scriptUrl}?addPulseTag=true&type=${mode}&tag=${encodeURIComponent(tag)}" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap"><span class="text-[11px] font-bold text-blue-400">${isHot ? '🔥 ' : ''}${tag}</span><span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span></a>`
+  }).join('')}
+      </div>
+    </div>` : ''}
+
+    <div class="space-y-4">
+      <div>
+        <label class="text-[11px] text-slate-400 uppercase mb-2 block">Type or paste tags (comma or newline separated)</label>
+        <textarea id="tagInput" oninput="updatePreview()" class="w-full h-40 bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-100 text-sm outline-none focus:border-green-500 resize-none">${currentTags}</textarea>
+      </div>
+      
+      <div>
+        <label class="text-[11px] text-slate-400 uppercase mb-2 block">Quick edit (+ to add, - to delete):</label>
+        <div class="flex gap-2">
+          <input id="quickEditInput" type="text" placeholder="+Tesla, -Monday, +Apple..." oninput="updateButtonStates()" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg py-2 px-3 text-slate-100 text-sm outline-none focus:border-blue-500">
+          <button id="applyBtn" onclick="smartEdit()" disabled class="bg-blue-600 px-4 py-2 rounded-lg font-bold uppercase text-xs text-white disabled:opacity-30 disabled:cursor-not-allowed">Apply</button>
+        </div>
+        <p class="text-[9px] text-slate-500 mt-1">Tip: Use +word to add, -word to delete. No prefix = add</p>
+      </div>
+      
+      <div>
+        <div class="flex items-center gap-2 cursor-pointer" onclick="togglePreview()">
+          <p id="previewLabel" class="text-[11px] text-slate-400 uppercase">Preview (0 tags):</p>
+          <span id="previewToggle" class="material-icons-round text-slate-500 text-sm">expand_more</span>
+        </div>
+        <div id="previewTags" class="hidden flex-wrap gap-1 mt-2"></div>
+      </div>
+      
+      <button id="saveBtn" onclick="saveTags()" disabled class="w-full bg-green-600 py-3 rounded-lg font-bold uppercase text-sm disabled:opacity-30 disabled:cursor-not-allowed">Save Changes</button>
+    </div>
+
+    <script>
+      let previewExpanded = false;
+      const originalTags = '${currentTags}';
+      let bulkModified = false;
+      
+      function parseTags(text) {
+        return text
+          .split(/[,\\n]+/)
+          .map(t => t.trim())
+          .filter(t => t.length > 0)
+          .filter((t, i, arr) => arr.indexOf(t) === i);
+      }
+      
+      function updateButtonStates() {
+        const quickEditInput = document.getElementById('quickEditInput').value.trim();
+        const bulkInput = document.getElementById('tagInput').value.trim();
+        const applyBtn = document.getElementById('applyBtn');
+        const saveBtn = document.getElementById('saveBtn');
+        
+        // Apply button: enabled only if Quick Edit has input
+        applyBtn.disabled = !quickEditInput;
+        
+        // Save button: enabled only if bulk text area is modified
+        bulkModified = bulkInput !== originalTags;
+        saveBtn.disabled = !bulkModified;
+      }
+      
+      function updatePreview() {
+        const text = document.getElementById('tagInput').value;
+        const tags = parseTags(text);
+        document.getElementById('previewLabel').innerText = 'Preview (' + tags.length + ' tags):';
+        if (previewExpanded) {
+          document.getElementById('previewTags').innerHTML = tags.map(t => 
+            '<span class="text-[10px] bg-blue-900/30 text-blue-400 px-2 py-1 rounded-full border border-blue-700/50">• ' + t + '</span>'
+          ).join(' ');
+        }
+        updateButtonStates();
+      }
+      
+      function togglePreview() {
+        previewExpanded = !previewExpanded;
+        const previewDiv = document.getElementById('previewTags');
+        const toggleIcon = document.getElementById('previewToggle');
+        
+        if (previewExpanded) {
+          previewDiv.classList.remove('hidden');
+          previewDiv.classList.add('flex');
+          toggleIcon.innerText = 'expand_less';
+          updatePreview();
+        } else {
+          previewDiv.classList.add('hidden');
+          previewDiv.classList.remove('flex');
+          toggleIcon.innerText = 'expand_more';
+        }
+      }
+      
+      function switchMode() {
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        const pulseData = '${args.queryParameters.pulseTags || ''}';
+        const url = '${scriptUrl}?state=TAG_EDITOR&mode=' + mode + (pulseData ? '&pulseTags=' + encodeURIComponent(pulseData) : '');
+        window.location.href = url;
+      }
+      
+      function smartEdit() {
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        const input = document.getElementById('quickEditInput').value.trim();
+        if (!input) {
+          alert('Please enter tags to add (+) or delete (-)');
+          return;
+        }
+        window.location.href = '${scriptUrl}?smartEditTags=true&type=' + mode + '&input=' + encodeURIComponent(input);
+      }
+      
+      function saveTags() {
+        const mode = document.querySelector('input[name="mode"]:checked').value;
+        const text = document.getElementById('tagInput').value;
+        const tags = parseTags(text);
+        if (tags.length === 0) {
+          alert('Please enter at least one tag');
+          return;
+        }
+        window.location.href = '${scriptUrl}?saveBulkTags=true&type=' + mode + '&tags=' + encodeURIComponent(tags.join('\\n'));
+      }
+      
+      updatePreview();
+      updateButtonStates();
+    </script>
+  </body></html>`
+  const wv = new WebView(); await wv.loadHTML(html); await wv.present();
+}
+
+async function renderMenu() {
+  const newCutoff = getNewCutoffMs()
+  const counts = FEEDS.filter(f => f.enabled).map(f => {
+    const path = fm.joinPath(CACHE_DIR, f.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json")
+    if (!fm.fileExists(path)) return { name: f.name, count: 0, hasNew: false }
+    const items = JSON.parse(fm.readString(path))
+    const unread = items.filter(i => !READ_HISTORY.includes(i.link))
+    const hasNew = unread.some(i => (Date.now() - new Date(i.date).getTime() < newCutoff))
+    return { name: f.name, count: unread.length, hasNew: hasNew }
+  })
+  const totalSum = counts.reduce((acc, curr) => acc + curr.count, 0)
+  const anyGlobalNew = counts.some(c => c.hasNew)
+  let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>body { background-color: #0f172a; color: #f1f5f9; }</style></head>
+  <body>
+    <header class="fixed top-0 left-0 right-0 z-40 bg-slate-900 border-b border-slate-800 px-5 py-4 flex justify-between items-center"><h1 class="text-sm font-bold tracking-widest uppercase text-slate-400">Select Source</h1><a href="${scriptUrl}?state=MANAGER" class="p-2 bg-slate-800 rounded-full border border-orange-500/50"><span class="material-icons-round text-orange-400">tune</span></a></header>
+    <main class="pt-24 px-4 space-y-3 pb-10">
+      <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between"><span>🔖 BOOKMARKS</span><span>${BOOKMARKS.length}</span></div>
+      <div onclick="window.location.href='${scriptUrl}?cat=ALL+SOURCES'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold"><span>🌟 ALL SOURCES ${anyGlobalNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span>${totalSum}</span></div>
+      ${counts.map(res => `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(res.name)}'" class="p-4 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-center"><span class="text-slate-300 flex items-center">${res.name} ${res.hasNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span class="text-slate-400">${res.count}</span></div>`).join('')}
+    </main>
+  </body></html>`
+  const wv = new WebView(); await wv.loadHTML(html); await wv.present();
+}
+
+async function renderManager() {
+  for (let f of FEEDS) { if (!f.validated) { let result = await validateUrl(f.url); f.validation = result.status; f.format = result.format; if (result.status === "green") f.validated = true; } }
+  fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS));
+  let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>body { background-color: #0f172a; color: #f1f5f9; }</style></head><body class="p-4"><div class="flex justify-between items-center mb-6"><h1 class="text-lg font-bold text-orange-400 uppercase">Manage Feeds</h1><a href="${scriptUrl}?clearValidation=true" class="text-slate-400 material-icons-round">close</a></div><div class="bg-slate-900 p-4 rounded-xl border border-slate-800 mb-6 space-y-2"><input id="n" type="text" placeholder="Feed Name" class="w-full bg-slate-800 rounded p-2 text-sm outline-none border border-transparent focus:border-orange-500 text-slate-100"><input id="u" type="text" placeholder="RSS URL" class="w-full bg-slate-800 rounded p-2 text-sm outline-none border border-transparent focus:border-orange-500 text-slate-100"><button onclick="let n=document.getElementById('n').value; let u=document.getElementById('u').value; if(n&&u) window.location.href='${scriptUrl}?addFeed=true&name='+encodeURIComponent(n)+'&url='+encodeURIComponent(u)" class="w-full bg-orange-600 py-2 rounded font-bold text-sm uppercase text-white">Add Source</button></div><div class="space-y-2 pb-10">${FEEDS.map((f, i) => {
+    let borderClass = f.validation === "red" ? "border-red-500 border-2" : (f.validation === "green" ? "border-green-500 border-2" : "border-slate-800");
+    let formatLabel = f.format ? `<span class="text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 mr-2">[${f.format}]</span>` : "";
+    return `<div class="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border transition-all duration-300 ${borderClass}"><div class="flex-1 truncate pr-4 ${f.enabled ? 'text-slate-100' : 'text-slate-500'}"><span class="text-sm font-medium">${f.name}</span> <div class=\"mt-1\">${formatLabel}</div></div><div class="flex items-center space-x-4 shrink-0"><a href="${scriptUrl}?state=MANAGER&idx=${i}&move=up" class="material-icons-round text-slate-500 text-xl">expand_less</a><a href="${scriptUrl}?state=MANAGER&idx=${i}&move=down" class="material-icons-round text-slate-500 text-xl">expand_more</a><a href="${scriptUrl}?state=MANAGER&idx=${i}&edit=true" class="material-icons-round text-orange-400 text-xl">edit</a><a href="${scriptUrl}?state=MANAGER&idx=${i}&toggle=true" class="material-icons-round text-xl ${f.enabled ? 'text-blue-500' : 'text-slate-400'}">check_circle</a><a href="${scriptUrl}?state=MANAGER&idx=${i}&delete=true" class="material-icons-round text-red-500 text-xl">delete</a></div></div>`
+  }).join('')}</div><button onclick="window.location.href='${scriptUrl}?state=READER'\" class="w-full bg-slate-700 py-3 rounded-xl">Back to Reader</button></body></html>`
+  const wv = new WebView(); wv.shouldDisplayShareButton = false; await wv.loadHTML(html); await wv.present();
+}
+
+async function validateUrl(url) {
+  try {
+    const req = new Request(url); req.timeoutInterval = 4; const xml = await req.loadString(); const lxml = xml.toLowerCase(); let status = "red"; let format = "";
+    if (lxml.includes("<item")) { status = "green"; format = "RSS"; } else if (lxml.includes("<entry") || lxml.includes("<feed")) { status = "green"; format = "ATOM"; }
+    return { status, format };
+  } catch (e) { return { status: "red", format: "" }; }
+}
+
+if (args.queryParameters.addFeed) {
+  const newName = args.queryParameters.name; const newUrl = args.queryParameters.url;
+  let validation = await validateUrl(newUrl);
+  if (validation.status === "green") { await fetchSingleFeed(newUrl, newName); }
+  FEEDS.push({ name: newName, url: newUrl, enabled: true, validation: validation.status, validated: (validation.status === "green"), format: validation.format });
+  fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS)); Safari.open(`${scriptUrl}?state=MANAGER`); return
+}
+
+if (args.queryParameters.clearValidation) {
+  const cleanFeeds = FEEDS.map(f => { if (f.validation === "green") delete f.validation; return f; });
+  fm.writeString(CONFIG_FILE, JSON.stringify(cleanFeeds)); Safari.open(`${scriptUrl}?state=MENU`); return
+}
+
+if (args.queryParameters.cat) {
+  if (CATEGORY !== "BOOKMARKS") fm.writeString(PREV_CAT_FILE, CATEGORY)
+  fm.writeString(CAT_FILE, args.queryParameters.cat); Safari.open(scriptUrl); return
+}
+
+// --- INITIALIZATION ---
+
+if (APP_STATE === "READER") await renderReader()
+else if (APP_STATE === "MENU") await renderMenu()
+else if (APP_STATE === "MANAGER") await renderManager()
+else if (APP_STATE === "TAG_EDITOR") await renderTagEditor()
+
+Script.complete()
