@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V112.1
+// NEWS READER (RSS/ATOM) — V113.4
 // Protocol: v96.2 Engine 
-// Status: Fixed Bookmarks return navigation
+// Status: Polish - moved star after Favorites text
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -361,9 +361,37 @@ if (args.queryParameters.idx) {
   }
   if (args.queryParameters.toggle) FEEDS[i].enabled = !FEEDS[i].enabled
   if (args.queryParameters.edit) {
-    let a = new Alert(); a.title = "Edit Source"; a.addTextField("Name", FEEDS[i].name); a.addTextField("URL", FEEDS[i].url)
-    a.addAction("Save"); a.addCancelAction("Cancel")
-    if (await a.present() === 0) { FEEDS[i].name = a.textFieldValue(0); FEEDS[i].url = a.textFieldValue(1); delete FEEDS[i].validation; delete FEEDS[i].validated; delete FEEDS[i].format; }
+    let a = new Alert(); a.title = "Edit Source"
+    a.addTextField("Name", FEEDS[i].name)
+    a.addTextField("URL", FEEDS[i].url)
+
+    // Add Favorite toggle
+    const favAction = FEEDS[i].favorite ? "Remove from Favorites" : "Add to Favorites"
+    a.addAction(favAction)
+
+    // Add Enabled toggle
+    const enableAction = FEEDS[i].enabled ? "Disable" : "Enable"
+    a.addAction(enableAction)
+
+    a.addAction("Save")
+    a.addCancelAction("Cancel")
+
+    const choice = await a.present()
+    if (choice === 0) { // Toggle Favorite
+      FEEDS[i].favorite = !FEEDS[i].favorite
+      fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS))
+      Safari.open(`${scriptUrl}?state=MANAGER`); return
+    } else if (choice === 1) { // Toggle Enabled
+      FEEDS[i].enabled = !FEEDS[i].enabled
+      fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS))
+      Safari.open(`${scriptUrl}?state=MANAGER`); return
+    } else if (choice === 2) { // Save
+      FEEDS[i].name = a.textFieldValue(0)
+      FEEDS[i].url = a.textFieldValue(1)
+      delete FEEDS[i].validation
+      delete FEEDS[i].validated
+      delete FEEDS[i].format
+    }
   }
   fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS)); Safari.open(`${scriptUrl}?state=MANAGER`); return
 }
@@ -771,12 +799,18 @@ async function renderMenu() {
   const newCutoff = getNewCutoffMs()
   const counts = FEEDS.filter(f => f.enabled).map(f => {
     const path = fm.joinPath(CACHE_DIR, f.name.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json")
-    if (!fm.fileExists(path)) return { name: f.name, count: 0, hasNew: false }
+    if (!fm.fileExists(path)) return { name: f.name, count: 0, hasNew: false, favorite: f.favorite || false }
     const items = JSON.parse(fm.readString(path))
     const unread = items.filter(i => !READ_HISTORY.includes(i.link))
     const hasNew = unread.some(i => (Date.now() - new Date(i.date).getTime() < newCutoff))
-    return { name: f.name, count: unread.length, hasNew: hasNew }
+    return { name: f.name, count: unread.length, hasNew: hasNew, favorite: f.favorite || false }
   })
+
+  // Sort: Favorites first (alpha), then regular (alpha)
+  const favorites = counts.filter(c => c.favorite).sort((a, b) => a.name.localeCompare(b.name))
+  const regular = counts.filter(c => !c.favorite).sort((a, b) => a.name.localeCompare(b.name))
+  const sortedCounts = [...favorites, ...regular]
+
   const totalSum = counts.reduce((acc, curr) => acc + curr.count, 0)
   const anyGlobalNew = counts.some(c => c.hasNew)
   let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>body { background-color: #0f172a; color: #f1f5f9; }</style></head>
@@ -785,20 +819,58 @@ async function renderMenu() {
     <main class="pt-24 px-4 space-y-3 pb-10">
       <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between"><span>🔖 BOOKMARKS</span><span>${BOOKMARKS.length}</span></div>
       <div onclick="window.location.href='${scriptUrl}?cat=ALL+SOURCES'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold"><span>🌟 ALL SOURCES ${anyGlobalNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span>${totalSum}</span></div>
-      ${counts.map(res => `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(res.name)}'" class="p-4 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-center"><span class="text-slate-300 flex items-center">${res.name} ${res.hasNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span class="text-slate-400">${res.count}</span></div>`).join('')}
+      ${sortedCounts.map(res => `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(res.name)}'" class="p-4 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-center"><span class="text-slate-300 flex items-center">${res.favorite ? '⭐ ' : ''}${res.name} ${res.hasNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span class="text-slate-400">${res.count}</span></div>`).join('')}
     </main>
   </body></html>`
   const wv = new WebView(); await wv.loadHTML(html); await wv.present();
 }
 
 async function renderManager() {
-  for (let f of FEEDS) { if (!f.validated) { let result = await validateUrl(f.url); f.validation = result.status; f.format = result.format; if (result.status === "green") f.validated = true; } }
-  fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS));
-  let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>body { background-color: #0f172a; color: #f1f5f9; }</style></head><body class="p-4"><div class="flex justify-between items-center mb-6"><h1 class="text-lg font-bold text-orange-400 uppercase">Manage Feeds</h1><a href="${scriptUrl}?clearValidation=true" class="text-slate-400 material-icons-round">close</a></div><div class="bg-slate-900 p-4 rounded-xl border border-slate-800 mb-6 space-y-2"><input id="n" type="text" placeholder="Feed Name" class="w-full bg-slate-800 rounded p-2 text-sm outline-none border border-transparent focus:border-orange-500 text-slate-100"><input id="u" type="text" placeholder="RSS URL" class="w-full bg-slate-800 rounded p-2 text-sm outline-none border border-transparent focus:border-orange-500 text-slate-100"><button onclick="let n=document.getElementById('n').value; let u=document.getElementById('u').value; if(n&&u) window.location.href='${scriptUrl}?addFeed=true&name='+encodeURIComponent(n)+'&url='+encodeURIComponent(u)" class="w-full bg-orange-600 py-2 rounded font-bold text-sm uppercase text-white">Add Source</button></div><div class="space-y-2 pb-10">${FEEDS.map((f, i) => {
-    let borderClass = f.validation === "red" ? "border-red-500 border-2" : (f.validation === "green" ? "border-green-500 border-2" : "border-slate-800");
-    let formatLabel = f.format ? `<span class="text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 mr-2">[${f.format}]</span>` : "";
-    return `<div class="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border transition-all duration-300 ${borderClass}"><div class="flex-1 truncate pr-4 ${f.enabled ? 'text-slate-100' : 'text-slate-500'}"><span class="text-sm font-medium">${f.name}</span> <div class=\"mt-1\">${formatLabel}</div></div><div class="flex items-center space-x-4 shrink-0"><a href="${scriptUrl}?state=MANAGER&idx=${i}&move=up" class="material-icons-round text-slate-500 text-xl">expand_less</a><a href="${scriptUrl}?state=MANAGER&idx=${i}&move=down" class="material-icons-round text-slate-500 text-xl">expand_more</a><a href="${scriptUrl}?state=MANAGER&idx=${i}&edit=true" class="material-icons-round text-orange-400 text-xl">edit</a><a href="${scriptUrl}?state=MANAGER&idx=${i}&toggle=true" class="material-icons-round text-xl ${f.enabled ? 'text-blue-500' : 'text-slate-400'}">check_circle</a><a href="${scriptUrl}?state=MANAGER&idx=${i}&delete=true" class="material-icons-round text-red-500 text-xl">delete</a></div></div>`
-  }).join('')}</div><button onclick="window.location.href='${scriptUrl}?state=READER'\" class="w-full bg-slate-700 py-3 rounded-xl">Back to Reader</button></body></html>`
+  // Initialize favorite field for existing feeds
+  for (let f of FEEDS) {
+    if (f.favorite === undefined) f.favorite = false
+    if (!f.validated) {
+      let result = await validateUrl(f.url)
+      f.validation = result.status
+      f.format = result.format
+      if (result.status === "green") f.validated = true
+    }
+  }
+
+  // Sort: Favorites first (alpha), then regular (alpha)
+  const favorites = FEEDS.filter(f => f.favorite).sort((a, b) => a.name.localeCompare(b.name))
+  const regular = FEEDS.filter(f => !f.favorite).sort((a, b) => a.name.localeCompare(b.name))
+  const sortedFeeds = [...favorites, ...regular]
+
+  fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS))
+
+  let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>body { background-color: #0f172a; color: #f1f5f9; }</style></head><body class="p-4"><div class="flex justify-between items-center mb-6"><h1 class="text-lg font-bold text-orange-400 uppercase">Manage Feeds</h1><a href="${scriptUrl}?clearValidation=true" class="text-slate-400 material-icons-round">close</a></div><div class="bg-slate-900 p-4 rounded-xl border border-slate-800 mb-6 space-y-2"><input id="n" type="text" placeholder="Feed Name" class="w-full bg-slate-800 rounded p-2 text-sm outline-none border border-transparent focus:border-orange-500 text-slate-100"><input id="u" type="text" placeholder="RSS URL" class="w-full bg-slate-800 rounded p-2 text-sm outline-none border border-transparent focus:border-orange-500 text-slate-100"><button onclick="let n=document.getElementById('n').value; let u=document.getElementById('u').value; if(n&&u) window.location.href='${scriptUrl}?addFeed=true&name='+encodeURIComponent(n)+'&url='+encodeURIComponent(u)" class="w-full bg-orange-600 py-2 rounded font-bold text-sm uppercase text-white">Add Source</button></div>`
+
+  // Favorites section
+  if (favorites.length > 0) {
+    html += `<div class="mb-4"><h2 class="text-xs font-bold text-blue-400 uppercase mb-2 px-2">Favorites ⭐</h2><div class="space-y-2">`
+    favorites.forEach(f => {
+      const originalIdx = FEEDS.indexOf(f)
+      let borderClass = f.validation === "red" ? "border-red-500 border-2" : (f.validation === "green" ? "border-green-500 border-2" : "border-slate-800")
+      let formatLabel = f.format ? `<span class="text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 mr-2">[${f.format}]</span>` : ""
+      html += `<div class="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border transition-all duration-300 ${borderClass}"><div class="flex-1 truncate pr-4 ${f.enabled ? 'text-slate-100' : 'text-slate-500'}"><span class="text-sm font-medium">⭐ ${f.name}</span> <div class="mt-1">${formatLabel}</div></div><div class="flex items-center space-x-4 shrink-0"><a href="${scriptUrl}?state=MANAGER&idx=${originalIdx}&edit=true" class="material-icons-round text-orange-400 text-xl">edit</a><a href="${scriptUrl}?state=MANAGER&idx=${originalIdx}&delete=true" class="material-icons-round text-red-500 text-xl">delete</a></div></div>`
+    })
+    html += `</div></div>`
+  }
+
+  // Regular sources section
+  if (regular.length > 0) {
+    html += `<div class="mb-4"><h2 class="text-xs font-bold text-slate-400 uppercase mb-2 px-2">Sources</h2><div class="space-y-2">`
+    regular.forEach(f => {
+      const originalIdx = FEEDS.indexOf(f)
+      let borderClass = f.validation === "red" ? "border-red-500 border-2" : (f.validation === "green" ? "border-green-500 border-2" : "border-slate-800")
+      let formatLabel = f.format ? `<span class="text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 mr-2">[${f.format}]</span>` : ""
+      html += `<div class="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border transition-all duration-300 ${borderClass}"><div class="flex-1 truncate pr-4 ${f.enabled ? 'text-slate-100' : 'text-slate-500'}"><span class="text-sm font-medium">${f.name}</span> <div class="mt-1">${formatLabel}</div></div><div class="flex items-center space-x-4 shrink-0"><a href="${scriptUrl}?state=MANAGER&idx=${originalIdx}&edit=true" class="material-icons-round text-orange-400 text-xl">edit</a><a href="${scriptUrl}?state=MANAGER&idx=${originalIdx}&delete=true" class="material-icons-round text-red-500 text-xl">delete</a></div></div>`
+    })
+    html += `</div></div>`
+  }
+
+  html += `<button onclick="window.location.href='${scriptUrl}?state=READER'" class="w-full bg-slate-700 py-3 rounded-xl">Back to Reader</button></body></html>`
   const wv = new WebView(); wv.shouldDisplayShareButton = false; await wv.loadHTML(html); await wv.present();
 }
 
