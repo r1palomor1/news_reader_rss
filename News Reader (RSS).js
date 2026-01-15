@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V111.4
+// NEWS READER (RSS/ATOM) — V112.0
 // Protocol: v96.2 Engine 
-// Status: External Link, Bulk Tag Editor, Smart Quick Edit, Pulse Tags
+// Status: Pulse Tags Fixes (Thi/New blacklist)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -401,7 +401,7 @@ async function renderReader() {
     let tagArticles = {}; // Track which articles match each tag
     const userExclusions = new Set(getTags(EXCLUSION_FILE));
     const userInclusions = getTags(INCLUSION_FILE);
-    const blacklist = new Set(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'Updated', 'News', 'Today', 'Breaking', 'Source', 'Photo', 'Video', 'Home', 'Page', 'Live', 'The', 'How', 'What', 'Why', 'Who', 'Where', 'When', 'This', 'That', 'And', 'But', 'For', 'With', 'From', 'Into', 'Their', 'Them', 'Your', 'They', 'Will', 'More', 'About', 'Annual', 'Transcript', 'Presents', 'Inc', 'Conference', 'Healthcare']);
+    const blacklist = new Set(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'Updated', 'New', 'News', 'Today', 'Breaking', 'Source', 'Photo', 'Video', 'Home', 'Page', 'Live', 'The', 'How', 'What', 'Why', 'Who', 'Where', 'When', 'This', 'That', 'And', 'But', 'For', 'With', 'From', 'Into', 'Their', 'Them', 'Your', 'They', 'Will', 'More', 'About', 'Annual', 'Transcript', 'Presents', 'Inc', 'Conference', 'Healthcare']);
 
     const pool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? items.filter(i => !READ_HISTORY.includes(i.link)) : items;
 
@@ -428,13 +428,17 @@ async function renderReader() {
       const matches = titleWork.match(regex) || [];
       matches.forEach(phrase => {
         let clean = phrase.trim().replace(/[.:,;]$/, "").replace(/'s$/i, "");
+
+        // CHECK BLACKLIST FIRST (before pluralization) to prevent "This" → "Thi"
+        if (blacklist.has(clean) || userExclusions.has(clean) || clean.length < 3) return;
+
+        // THEN do pluralization
         let root = clean;
         if (clean.length > 3 && clean.toLowerCase().endsWith('s')) {
           if (clean.toLowerCase().endsWith('ies')) root = clean.slice(0, -3) + 'y';
           else if (!clean.toLowerCase().endsWith('ss')) root = clean.slice(0, -1);
         }
         const lowerRoot = root.toLowerCase();
-        if (blacklist.has(root) || userExclusions.has(root) || root.length < 3) return;
         if (!seenInThisItem.has(lowerRoot)) {
           let masterKey = Object.keys(rawCounts).find(k => k.toLowerCase() === lowerRoot);
           if (masterKey) {
