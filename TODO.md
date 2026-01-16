@@ -1,5 +1,9 @@
 # News Reader (RSS) - TODO List
 
+## 🚨 MANDATORY DEVELOPMENT RULES
+1. **Version Bump:** ALWAYS update the version number (e.g., V114.x) in `News Reader (RSS).js` (Line 5) whenever code is modified.
+2. **Status Update:** Update the Status comment (Line 7) to reflect the specific change.
+
 ---
 
 ### Play All & Bulk Selection Not Working
@@ -110,7 +114,7 @@ function bulkPlay() {
 ---
 
 ### Tag Editor Save Operations Don't Preserve Page
-**Status:** TODO - Partially working  
+**Status:** DONE - V114.4 (Root Cause Fixed)  
 **Priority:** Medium - Annoying but has workaround
 
 **Current Behavior:**

@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V114.1
+// NEWS READER (RSS/ATOM) — V114.4
 // Protocol: v96.2 Engine 
-// Status: Added Floating Jump Buttons (Up/Down) for easier navigation
+// Status: Fixed Tag Editor Save Page Reset Bug (Root Cause Identified)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -60,7 +60,20 @@ if (args.queryParameters.toggleUnread) {
 
 let APP_STATE = args.queryParameters.state || "READER"
 let SEARCH_TERM = args.queryParameters.search || ""
+
+const DEBUG_FILE = fm.joinPath(dir, "debug_log.txt")
+function logToFile(msg) {
+  try {
+    const prev = fm.fileExists(DEBUG_FILE) ? fm.readString(DEBUG_FILE) : "";
+    // Keep last 4000 chars to avoid memory issues
+    let newContent = prev + "\n[" + new Date().toLocaleTimeString() + "] " + msg;
+    if (newContent.length > 4000) newContent = newContent.substring(newContent.length - 4000);
+    fm.writeString(DEBUG_FILE, newContent);
+  } catch (e) { }
+}
+
 let PAGE = parseInt(args.queryParameters.page) || 1
+logToFile(`PAGE Init: ${PAGE} (Params: ${JSON.stringify(args.queryParameters)})`)
 const ITEMS_PER_PAGE = 25
 
 const scriptName = Script.name()
@@ -312,6 +325,30 @@ if (args.queryParameters.bulkBookmark) {
   saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
+if (args.queryParameters.showLogs) {
+  if (fm.fileExists(DEBUG_FILE)) {
+    const logs = fm.readString(DEBUG_FILE);
+    const a = new Alert();
+    a.title = "Debug Logs";
+    a.message = logs;
+    a.addAction("Copy to Clipboard");
+    a.addAction("Clear Logs");
+    a.addCancelAction("Close");
+    const id = await a.present();
+    if (id === 0) {
+      Pasteboard.copy(logs);
+      const c = new Alert(); c.title = "Copied to Clipboard"; c.addCancelAction("OK"); await c.present();
+    } else if (id === 1) {
+      fm.remove(DEBUG_FILE);
+    }
+  } else {
+    const a = new Alert(); a.message = "No logs found."; await a.present();
+  }
+  // Return to reader
+  Safari.open(scriptUrl + '?page=' + PAGE);
+  return;
+}
+
 if (args.queryParameters.check) {
   const url = args.queryParameters.check
   if (!READ_HISTORY.includes(url)) {
@@ -408,11 +445,13 @@ function formatDateTime(dateStr) {
 
 // Handle reopening Tag Editor with fresh pulse tags
 if (args.queryParameters.reopenTagEditor) {
+  logToFile(`Reopen Triggered. PageParam: ${args.queryParameters.page}`)
   const mode = args.queryParameters.mode || 'exclude'
   // Will fall through to renderReader which calculates pulse tags
   // Then JavaScript will call openTagEditor() which passes them
   APP_STATE = 'READER'
   // Set a flag to auto-open Tag Editor after reader renders
+  if (args.queryParameters.page) { PAGE = parseInt(args.queryParameters.page) }
   const autoOpenTagEditor = true
 }
 
@@ -551,6 +590,7 @@ async function renderReader() {
     <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}'" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
     <div onclick="openTagEditor()" class="menu-item"><span class="material-icons-round text-green-400">label</span><span>Tag Editor</span></div>
     <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
+    <div onclick="window.location.href='${scriptUrl}?showLogs=true&page=${PAGE}'" class="menu-item"><span class="material-icons-round text-slate-500">bug_report</span><span>Debug Logs</span></div>
     <div onclick="window.location.href='${scriptUrl}?refresh=true'" class="menu-item"><span class="material-icons-round text-slate-400">refresh</span><span>Refresh All</span></div>
   </div>
 
@@ -666,10 +706,11 @@ async function renderReader() {
   function toggleMenu(e) { e.stopPropagation(); const m = document.getElementById('actionMenu'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; }
   window.addEventListener('click', () => { document.getElementById('actionMenu').style.display = 'none'; });
   function setPulseSearch(tag) { document.getElementById('searchInput').value = tag; filterNews(); }
-  function openTagEditor(targetMode) {
+  function openTagEditor(targetMode, explicitPage) {
     const pulseData = encodeURIComponent(JSON.stringify(${JSON.stringify(pulseTagsList)}));
     const mode = targetMode || 'exclude';
-    window.location.href = '${scriptUrl}?state=TAG_EDITOR&mode=' + mode + '&pulseTags=' + pulseData + '&page=${PAGE}';
+    const p = explicitPage || ${PAGE};
+    window.location.href = '${scriptUrl}?state=TAG_EDITOR&mode=' + mode + '&pulseTags=' + pulseData + '&page=' + p;
   }
   function handleTouchStart(evt) { xDown = evt.touches[0].clientX; yDown = evt.touches[0].clientY; }
   function handleSwipe(evt, el) { if (!xDown || !yDown) return; let xDiff = xDown - evt.changedTouches[0].clientX; let yDiff = yDown - evt.changedTouches[0].clientY; if (Math.abs(xDiff) > 80 && Math.abs(xDiff) > Math.abs(yDiff)) executeAction(el, xDiff > 0 ? 'bookmark' : 'check'); xDown = null; yDown = null; }
@@ -752,7 +793,7 @@ async function renderReader() {
   function clearSelection() { document.querySelectorAll('.bulk-check').forEach(cb => cb.checked = false); updateBulkBar(); }
   function clearSearchBar() { document.getElementById('searchInput').value = ''; document.getElementById('clearSearch').classList.add('hidden'); filterNews(); }
   filterNews();
-  ${args.queryParameters.reopenTagEditor ? `setTimeout(() => { openTagEditor('${args.queryParameters.mode || 'exclude'}'); }, 100);` : ''}
+  ${args.queryParameters.reopenTagEditor ? `setTimeout(() => { openTagEditor('${args.queryParameters.mode || 'exclude'}', ${args.queryParameters.page || PAGE}); }, 100);` : ''}
 </script></body></html>`
   const wv = new WebView(); await wv.loadHTML(html); await wv.present();
 }
@@ -890,7 +931,7 @@ async function renderTagEditor() {
       function switchMode() {
         const mode = document.querySelector('input[name="mode"]:checked').value;
         const pulseData = '${args.queryParameters.pulseTags || ''}';
-        const url = '${scriptUrl}?state=TAG_EDITOR&mode=' + mode + (pulseData ? '&pulseTags=' + encodeURIComponent(pulseData) : '');
+        const url = '${scriptUrl}?state=TAG_EDITOR&mode=' + mode + (pulseData ? '&pulseTags=' + encodeURIComponent(pulseData) : '') + '&page=${PAGE}';
         window.location.href = url;
       }
       
@@ -901,7 +942,7 @@ async function renderTagEditor() {
           alert('Please enter tags to add (+) or delete (-)');
           return;
         }
-        window.location.href = '${scriptUrl}?smartEditTags=true&type=' + mode + '&input=' + encodeURIComponent(input);
+        window.location.href = '${scriptUrl}?smartEditTags=true&type=' + mode + '&input=' + encodeURIComponent(input) + '&page=${PAGE}';
       }
       
       function saveTags() {
@@ -912,7 +953,7 @@ async function renderTagEditor() {
           alert('Please enter at least one tag');
           return;
         }
-        window.location.href = '${scriptUrl}?saveBulkTags=true&type=' + mode + '&tags=' + encodeURIComponent(tags.join('\\n'));
+        window.location.href = '${scriptUrl}?saveBulkTags=true&type=' + mode + '&tags=' + encodeURIComponent(tags.join('\\n')) + '&page=${PAGE}';
       }
       
       updatePreview();
