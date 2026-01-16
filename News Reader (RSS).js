@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V113.4
+// NEWS READER (RSS/ATOM) — V113.9
 // Protocol: v96.2 Engine 
-// Status: Polish - moved star after Favorites text
+// Status: Tag Editor close button preserves page
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -178,7 +178,7 @@ if (args.queryParameters.addPulseTag) {
     saveTags(file, tags)
   }
 
-  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}`); return
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`); return
 }
 
 if (args.queryParameters.smartEditTags) {
@@ -220,7 +220,7 @@ if (args.queryParameters.smartEditTags) {
   saveTags(file, tags)
 
   // Reload Tag Editor
-  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}`); return
+  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}&page=${PAGE}`); return
 }
 
 if (args.queryParameters.addBulkTags) {
@@ -244,7 +244,7 @@ if (args.queryParameters.addBulkTags) {
   saveTags(file, allTags)
 
   // Reload Tag Editor
-  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}`); return
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`); return
 }
 
 if (args.queryParameters.saveBulkTags) {
@@ -253,7 +253,7 @@ if (args.queryParameters.saveBulkTags) {
   const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
   const tags = tagsText.split('\n').map(t => t.trim()).filter(t => t.length > 0)
   saveTags(file, tags)
-  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}`); return
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`); return
 }
 
 if (args.queryParameters.saveTags) {
@@ -262,7 +262,7 @@ if (args.queryParameters.saveTags) {
   const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
   const tags = tagsText.split('\n').map(t => t.trim()).filter(t => t.length > 0)
   saveTags(file, tags)
-  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}`); return
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`); return
 }
 
 if (args.queryParameters.addTag) {
@@ -290,19 +290,19 @@ if (args.queryParameters.deleteTag) {
 if (args.queryParameters.bulkRead) {
   const links = JSON.parse(decodeURIComponent(args.queryParameters.bulkRead))
   links.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) })
-  saveHistory(READ_HISTORY); Safari.open(scriptUrl + '?' + searchParam); return
+  saveHistory(READ_HISTORY); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
 if (args.queryParameters.refresh) {
   const files = fm.listContents(CACHE_DIR);
   files.forEach(f => fm.remove(fm.joinPath(CACHE_DIR, f)))
-  await syncAllFeeds(); Safari.open(scriptUrl + '?' + searchParam); return
+  await syncAllFeeds(); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
 if (args.queryParameters.bulkBookmark) {
   const data = JSON.parse(decodeURIComponent(args.queryParameters.bulkBookmark))
   data.forEach(item => { if (!BOOKMARKS.some(b => b.link === item.link)) BOOKMARKS.push(item) })
-  saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam); return
+  saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
 if (args.queryParameters.check) {
@@ -316,7 +316,7 @@ if (args.queryParameters.check) {
     }
     const isPlayAll = args.queryParameters.playall === "true"
     const bulkList = args.queryParameters.bulkList || ""
-    const callback = encodeURIComponent(`${scriptUrl}?playall=${isPlayAll}${searchParam}${bulkList ? '&bulkList=' + bulkList : ''}`)
+    const callback = encodeURIComponent(`${scriptUrl}?playall=${isPlayAll}${searchParam}&page=${PAGE}${bulkList ? '&bulkList=' + bulkList : ''}`)
     Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`)
     return
   }
@@ -326,7 +326,7 @@ if (args.queryParameters.uncheck) {
   const url = args.queryParameters.uncheck
   const idx = READ_HISTORY.indexOf(url)
   if (idx > -1) { READ_HISTORY.splice(idx, 1); saveHistory(READ_HISTORY) }
-  Safari.open(scriptUrl + '?' + searchParam); return
+  Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
 if (args.queryParameters.externalLink) {
@@ -343,7 +343,7 @@ if (args.queryParameters.bookmark) {
   } else {
     BOOKMARKS.push({ title: args.queryParameters.title, link: bLink, source: args.queryParameters.source, date: args.queryParameters.date, desc: args.queryParameters.desc })
   }
-  saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam); return
+  saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
 if (args.queryParameters.externalLink) {
@@ -545,7 +545,7 @@ async function renderReader() {
 
   <div id="actionMenu">
     ${CATEGORY === 'BOOKMARKS' ? `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(returnSource)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>` : `<div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevCat=${encodeURIComponent(CATEGORY)}'" class="menu-item"><span class="material-icons-round text-orange-500">bookmarks</span><span>Bookmarks</span></div>`}
-    <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value)" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
+    <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}'" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
     <div onclick="openTagEditor()" class="menu-item"><span class="material-icons-round text-green-400">label</span><span>Tag Editor</span></div>
     <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
     <div onclick="window.location.href='${scriptUrl}?refresh=true'" class="menu-item"><span class="material-icons-round text-slate-400">refresh</span><span>Refresh All</span></div>
@@ -573,10 +573,74 @@ async function renderReader() {
         </div>
       </div>
     </article>`}).join('')}
-    <div id="paginationControls" class="flex justify-center items-center gap-12 py-8 text-slate-500">
-      ${PAGE > 1 ? `<a href="${scriptUrl}?page=${PAGE - 1}${searchParam}" class="material-icons-round text-3xl">chevron_left</a>` : `<span class="material-icons-round text-3xl opacity-20">chevron_left</span>`}
-      <span class="text-xs font-bold uppercase tracking-widest">Page ${PAGE}</span>
-      ${startIdx + ITEMS_PER_PAGE < totalCount ? `<a href="${scriptUrl}?page=${PAGE + 1}${searchParam}" class="material-icons-round text-3xl">chevron_right</a>` : `<span class="material-icons-round text-3xl opacity-20">chevron_right</span>`}
+    <div id="paginationControls" class="flex justify-center items-center gap-3 py-8 text-slate-500">
+      ${(() => {
+      const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
+      if (totalPages <= 1) return '';
+
+      let pages = [];
+
+      // Home button (first page)
+      pages.push(PAGE > 1
+        ? `<a href="${scriptUrl}?page=1${searchParam}" class="material-icons-round text-xl text-slate-400 hover:text-blue-500">first_page</a>`
+        : `<span class="material-icons-round text-xl opacity-20">first_page</span>`
+      );
+
+      // Previous button
+      pages.push(PAGE > 1
+        ? `<a href="${scriptUrl}?page=${PAGE - 1}${searchParam}" class="material-icons-round text-2xl">chevron_left</a>`
+        : `<span class="material-icons-round text-2xl opacity-20">chevron_left</span>`
+      );
+
+      // Page numbers with smart ellipsis
+      const maxVisible = 5;
+      let startPage, endPage;
+
+      if (totalPages <= maxVisible) {
+        // Show all pages
+        startPage = 1;
+        endPage = totalPages;
+      } else {
+        // Smart windowing
+        if (PAGE <= 3) {
+          startPage = 1;
+          endPage = maxVisible;
+        } else if (PAGE >= totalPages - 2) {
+          startPage = totalPages - maxVisible + 1;
+          endPage = totalPages;
+        } else {
+          startPage = PAGE - 2;
+          endPage = PAGE + 2;
+        }
+      }
+
+      // Leading ellipsis
+      if (startPage > 1) {
+        pages.push('<span class="text-slate-600">...</span>');
+      }
+
+      // Page numbers
+      for (let i = startPage; i <= endPage; i++) {
+        if (i === PAGE) {
+          pages.push(`<span class="px-2 py-1 text-sm font-bold text-blue-500">${i}</span>`);
+        } else {
+          pages.push(`<a href="${scriptUrl}?page=${i}${searchParam}" class="px-2 py-1 text-sm font-medium text-slate-400 hover:text-blue-500">${i}</a>`);
+        }
+      }
+
+      // Trailing ellipsis
+      if (endPage < totalPages) {
+        pages.push('<span class="text-slate-600">...</span>');
+      }
+
+      // Next button
+      pages.push(PAGE < totalPages
+        ? `<a href="${scriptUrl}?page=${PAGE + 1}${searchParam}" class="material-icons-round text-2xl">chevron_right</a>`
+        : `<span class="material-icons-round text-2xl opacity-20">chevron_right</span>`
+      );
+
+      return pages.join('');
+    })()}
     </div>
   </main>
   <div id="bulkBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass border border-slate-700 rounded-full px-6 py-3 hidden flex items-center gap-8 shadow-2xl z-50">
@@ -596,7 +660,7 @@ async function renderReader() {
   function openTagEditor(targetMode) {
     const pulseData = encodeURIComponent(JSON.stringify(${JSON.stringify(pulseTagsList)}));
     const mode = targetMode || 'exclude';
-    window.location.href = '${scriptUrl}?state=TAG_EDITOR&mode=' + mode + '&pulseTags=' + pulseData;
+    window.location.href = '${scriptUrl}?state=TAG_EDITOR&mode=' + mode + '&pulseTags=' + pulseData + '&page=${PAGE}';
   }
   function handleTouchStart(evt) { xDown = evt.touches[0].clientX; yDown = evt.touches[0].clientY; }
   function handleSwipe(evt, el) { if (!xDown || !yDown) return; let xDiff = xDown - evt.changedTouches[0].clientX; let yDiff = yDown - evt.changedTouches[0].clientY; if (Math.abs(xDiff) > 80 && Math.abs(xDiff) > Math.abs(yDiff)) executeAction(el, xDiff > 0 ? 'bookmark' : 'check'); xDown = null; yDown = null; }
@@ -654,7 +718,7 @@ async function renderTagEditor() {
   <body class="p-6">
     <div class="flex justify-between items-center mb-6">
       <h1 class="text-xl font-black text-green-400 uppercase tracking-tight">Tag Editor</h1>
-      <a href="${scriptUrl}?state=READER" class="material-icons-round text-slate-400">close</a>
+      <a href="${scriptUrl}?state=READER&page=${PAGE}" class="material-icons-round text-slate-400">close</a>
     </div>
 
     <div class="flex justify-center bg-slate-900 p-3 rounded-xl mb-6 border border-slate-800 gap-6">
