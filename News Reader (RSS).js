@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V114.4
+// NEWS READER (RSS/ATOM) — V114.6
 // Protocol: v96.2 Engine 
-// Status: Fixed Tag Editor Save Page Reset Bug (Root Cause Identified)
+// Status: Fixed Bookmarks Return Page Issues (Kebab Menu)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -12,6 +12,7 @@ const dir = fm.documentsDirectory()
 const CONFIG_FILE = fm.joinPath(dir, "global_news_feeds.json")
 const CAT_FILE = fm.joinPath(dir, "global_news_category.txt")
 const PREV_CAT_FILE = fm.joinPath(dir, "prev_category.txt")
+const PREV_PAGE_FILE = fm.joinPath(dir, "prev_page.txt")
 const HISTORY_FILE = fm.joinPath(dir, "read_history.json")
 const BOOKMARK_FILE = fm.joinPath(dir, "bookmarks.json")
 const CACHE_DIR = fm.joinPath(dir, "news_cache")
@@ -558,7 +559,7 @@ async function renderReader() {
 <body class="pb-32">
   <header class="fixed top-0 left-0 right-0 z-40 glass">
     <div class="px-5 pt-3 pb-2 flex justify-between items-center">
-      <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value)">
+      <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}'">
         <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${CATEGORY} ▼</h1>
         <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} ${CATEGORY === 'BOOKMARKS' ? 'Saved' : (SHOW_UNREAD_ONLY ? 'Unread' : 'ALL ITEMS')}</span>
       </div>
@@ -586,7 +587,7 @@ async function renderReader() {
   </header>
 
   <div id="actionMenu">
-    ${CATEGORY === 'BOOKMARKS' ? `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(returnSource)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>` : `<div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevCat=${encodeURIComponent(CATEGORY)}'" class="menu-item"><span class="material-icons-round text-orange-500">bookmarks</span><span>Bookmarks</span></div>`}
+    ${CATEGORY === 'BOOKMARKS' ? `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(returnSource)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>` : `<div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevCat=${encodeURIComponent(CATEGORY)}&prevPage=${PAGE}'" class="menu-item"><span class="material-icons-round text-orange-500">bookmarks</span><span>Bookmarks</span></div>`}
     <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}'" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
     <div onclick="openTagEditor()" class="menu-item"><span class="material-icons-round text-green-400">label</span><span>Tag Editor</span></div>
     <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
@@ -985,7 +986,7 @@ async function renderMenu() {
   <body>
     <header class="fixed top-0 left-0 right-0 z-40 bg-slate-900 border-b border-slate-800 px-5 py-4 flex justify-between items-center"><h1 class="text-sm font-bold tracking-widest uppercase text-slate-400">Select Source</h1><a href="${scriptUrl}?state=MANAGER" class="p-2 bg-slate-800 rounded-full border border-orange-500/50"><span class="material-icons-round text-orange-400">tune</span></a></header>
     <main class="pt-24 px-4 space-y-3 pb-10">
-      <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between"><span>🔖 BOOKMARKS</span><span>${BOOKMARKS.length}</span></div>
+      <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevPage=${PAGE}'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between"><span>🔖 BOOKMARKS</span><span>${BOOKMARKS.length}</span></div>
       <div onclick="window.location.href='${scriptUrl}?cat=ALL+SOURCES'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold"><span>🌟 ALL SOURCES ${anyGlobalNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span>${totalSum}</span></div>
       ${sortedCounts.map(res => `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(res.name)}'" class="p-4 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-center"><span class="text-slate-300 flex items-center">${res.favorite ? '⭐ ' : ''}${res.name} ${res.hasNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span class="text-slate-400">${res.count}</span></div>`).join('')}
     </main>
@@ -1064,8 +1065,21 @@ if (args.queryParameters.clearValidation) {
 }
 
 if (args.queryParameters.cat) {
+  // If moving TO Bookmarks, save current page
+  if (args.queryParameters.cat === "BOOKMARKS" && args.queryParameters.prevPage) {
+    fm.writeString(PREV_PAGE_FILE, args.queryParameters.prevPage);
+  }
+
+  // If moving AWAY from Bookmarks, try to restore page
+  let targetPage = 1;
+  if (CATEGORY === "BOOKMARKS" && args.queryParameters.cat !== "BOOKMARKS") {
+    if (fm.fileExists(PREV_PAGE_FILE)) targetPage = parseInt(fm.readString(PREV_PAGE_FILE));
+  }
+
   if (CATEGORY !== "BOOKMARKS") fm.writeString(PREV_CAT_FILE, CATEGORY)
-  fm.writeString(CAT_FILE, args.queryParameters.cat); Safari.open(scriptUrl); return
+  fm.writeString(CAT_FILE, args.queryParameters.cat);
+  Safari.open(`${scriptUrl}?page=${targetPage}`);
+  return
 }
 
 // --- INITIALIZATION ---

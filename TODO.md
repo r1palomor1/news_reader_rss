@@ -82,7 +82,7 @@ function bulkPlay() {
 ---
 
 ### Bookmarks Return Doesn't Preserve Page
-**Status:** TODO - Attempted V113.8-V113.10, still broken  
+**Status:** DONE - V114.6 (Fixed Header & Kebab Logic)  
 **Priority:** Medium - Annoying but has workaround
 
 **Current Behavior:**
