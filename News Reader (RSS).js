@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V114.0
+// NEWS READER (RSS/ATOM) — V114.1
 // Protocol: v96.2 Engine 
-// Status: Smart Play All & Bulk Selection Implemented
+// Status: Added Floating Jump Buttons (Up/Down) for easier navigation
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -646,6 +646,12 @@ async function renderReader() {
     })()}
     </div>
   </main>
+  <div id="floatUp" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" class="fixed bottom-6 right-6 glass border border-slate-700 rounded-full p-3 shadow-xl z-40 hidden transition-all duration-300 hover:bg-slate-800">
+    <span class="material-icons-round text-blue-400 text-2xl">arrow_upward</span>
+  </div>
+  <div id="floatDown" onclick="window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'})" class="fixed bottom-6 right-6 glass border border-slate-700 rounded-full p-3 shadow-xl z-40 hidden transition-all duration-300 hover:bg-slate-800">
+    <span class="material-icons-round text-blue-400 text-2xl">arrow_downward</span>
+  </div>
   <div id="bulkBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass border border-slate-700 rounded-full px-6 py-3 hidden flex items-center gap-8 shadow-2xl z-50">
      <button onclick="bulkPlay()" class="flex flex-col items-center"><span class="material-icons-round text-blue-500">volume_up</span><span class="text-[9px] uppercase font-bold text-blue-500">Listen</span></button>
      <button onclick="bulkBookmark()" class="flex flex-col items-center"><span class="material-icons-round text-orange-500">star</span><span class="text-[9px] uppercase font-bold text-orange-500">Save</span></button>
@@ -685,6 +691,42 @@ async function renderReader() {
     });
     headerSub.innerText = visibleCount + " Matches";
   }
+  
+  // Floating Buttons Scroll Logic
+  let lastScroll = 0;
+  window.addEventListener('scroll', () => {
+    const currentScroll = window.scrollY;
+    const upBtn = document.getElementById('floatUp');
+    const downBtn = document.getElementById('floatDown');
+    
+    // Threshold to start showing controls (150px)
+    if (currentScroll < 150) {
+      upBtn.classList.add('hidden');
+      downBtn.classList.add('hidden');
+      lastScroll = currentScroll;
+      return;
+    }
+    
+    // Check if at bottom (allow 50px buffer)
+    if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 50) {
+       downBtn.classList.add('hidden');
+       upBtn.classList.remove('hidden');
+       lastScroll = currentScroll;
+       return;
+    }
+
+    if (currentScroll > lastScroll) {
+       // Scrolling Down
+       upBtn.classList.add('hidden');
+       downBtn.classList.remove('hidden');
+    } else {
+       // Scrolling Up
+       downBtn.classList.add('hidden');
+       upBtn.classList.remove('hidden');
+    }
+    lastScroll = currentScroll <= 0 ? 0 : currentScroll;
+  });
+
   function updateBulkBar() { const checked = document.querySelectorAll('.bulk-check:checked'); const bar = document.getElementById('bulkBar'); if (checked.length > 0) { bar.classList.remove('hidden'); bar.classList.add('flex'); } else { bar.classList.add('hidden'); bar.classList.remove('flex'); } }
   function playAll() {
     let urls = [];

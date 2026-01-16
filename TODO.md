@@ -250,7 +250,7 @@ Exit and re-enter Tag Editor to see pills again.
 ## Future Enhancements
 
 ### Page Number Visibility
-**Status:** TODO - UX Enhancement  
+**Status:** DONE - V114.1 (Floating Jump Buttons)  
 **Priority:** Low - Nice to have
 
 **Problem:**
