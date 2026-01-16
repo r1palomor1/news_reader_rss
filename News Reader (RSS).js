@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V113.9
+// NEWS READER (RSS/ATOM) — V114.0
 // Protocol: v96.2 Engine 
-// Status: Tag Editor close button preserves page
+// Status: Smart Play All & Bulk Selection Implemented
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -287,6 +287,13 @@ if (args.queryParameters.deleteTag) {
 
 // --- STANDARD ACTION HANDLERS ---
 
+if (args.queryParameters.playall) {
+  const urls = args.queryParameters.urls;
+  const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}${searchParam}`);
+  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(urls)}&x-success=${callback}`);
+  return;
+}
+
 if (args.queryParameters.bulkRead) {
   const links = JSON.parse(decodeURIComponent(args.queryParameters.bulkRead))
   links.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) })
@@ -314,11 +321,7 @@ if (args.queryParameters.check) {
       BOOKMARKS.splice(bIdx, 1); saveBookmarks(BOOKMARKS);
       if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
     }
-    const isPlayAll = args.queryParameters.playall === "true"
-    const bulkList = args.queryParameters.bulkList || ""
-    const callback = encodeURIComponent(`${scriptUrl}?playall=${isPlayAll}${searchParam}&page=${PAGE}${bulkList ? '&bulkList=' + bulkList : ''}`)
-    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`)
-    return
+
   }
 }
 
@@ -521,7 +524,7 @@ async function renderReader() {
         <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} ${CATEGORY === 'BOOKMARKS' ? 'Saved' : (SHOW_UNREAD_ONLY ? 'Unread' : 'ALL ITEMS')}</span>
       </div>
       <div class="flex gap-4 items-center">
-        <button id="playBtn" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
+        <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
         <button onclick="toggleMenu(event)" class="p-1"><span class="material-icons-round ${SHOW_UNREAD_ONLY ? 'text-slate-500' : 'text-red-500'}">more_vert</span></button>
       </div>
     </div>
@@ -683,8 +686,26 @@ async function renderReader() {
     headerSub.innerText = visibleCount + " Matches";
   }
   function updateBulkBar() { const checked = document.querySelectorAll('.bulk-check:checked'); const bar = document.getElementById('bulkBar'); if (checked.length > 0) { bar.classList.remove('hidden'); bar.classList.add('flex'); } else { bar.classList.add('hidden'); bar.classList.remove('flex'); } }
+  function playAll() {
+    let urls = [];
+    // Priority 1: Bulk Checks
+    const checked = document.querySelectorAll('.bulk-check:checked');
+    if (checked.length > 0) {
+      checked.forEach(cb => urls.push(cb.closest('.news-card').dataset.link));
+    } else {
+      // Priority 2: Filtered/Visible Cards (excluding hidden ones)
+      const visible = Array.from(document.querySelectorAll('.news-card:not(.hidden-card)'));
+      visible.forEach(card => urls.push(card.dataset.link));
+    }
+    
+    if (urls.length === 0) return;
+    
+    // Join with commas and call main script
+    const urlString = encodeURIComponent(urls.join(','));
+    window.location.href = '${scriptUrl}?playall=true&urls=' + urlString + '&page=${PAGE}';
+  }
   function bulkRead() { const links = Array.from(document.querySelectorAll('.bulk-check:checked')).map(cb => cb.closest('.news-card').dataset.link); const search = encodeURIComponent(document.getElementById('searchInput').value); window.location.href = \`${scriptUrl}?bulkRead=\${encodeURIComponent(JSON.stringify(links))}&search=\${search}&page=${PAGE}\`; }
-  function bulkPlay() { window.location.href = '${scriptUrl}?playall=true&bulkList=' + encodeURIComponent(Array.from(document.querySelectorAll('.bulk-check:checked')).map(cb => cb.closest('.news-card').dataset.link).join(',')) + '&page=${PAGE}'; }
+  function bulkPlay() { playAll(); }
   function bulkBookmark() { window.location.href = '${scriptUrl}?bulkBookmark=' + encodeURIComponent(JSON.stringify(Array.from(document.querySelectorAll('.bulk-check:checked')).map(cb => { const d = cb.closest('.news-card').dataset; return { title: d.title, link: d.link, source: d.source, date: d.date, desc: d.desc }; }))) + '&page=${PAGE}'; }
   function clearSelection() { document.querySelectorAll('.bulk-check').forEach(cb => cb.checked = false); updateBulkBar(); }
   function clearSearchBar() { document.getElementById('searchInput').value = ''; document.getElementById('clearSearch').classList.add('hidden'); filterNews(); }
