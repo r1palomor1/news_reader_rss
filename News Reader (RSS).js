@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V114.6
+// NEWS READER (RSS/ATOM) — V115.3
 // Protocol: v96.2 Engine 
-// Status: Fixed Bookmarks Return Page Issues (Kebab Menu)
+// Status: Fixed Old Bookmark Sorting Glitch
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -350,17 +350,26 @@ if (args.queryParameters.showLogs) {
   return;
 }
 
-if (args.queryParameters.check) {
-  const url = args.queryParameters.check
-  if (!READ_HISTORY.includes(url)) {
-    READ_HISTORY.push(url); saveHistory(READ_HISTORY)
-    const bIdx = BOOKMARKS.findIndex(b => b.link === url)
+if (args.queryParameters.listen) {
+  const url = args.queryParameters.listen
+  const bIdx = BOOKMARKS.findIndex(b => b.link === url)
+  const isFav = bIdx > -1 && BOOKMARKS[bIdx].favorite
+
+  // ONLY mark as read/remove if NOT a favorite
+  if (!isFav) {
+    if (!READ_HISTORY.includes(url)) {
+      READ_HISTORY.push(url); saveHistory(READ_HISTORY)
+    }
     if (bIdx > -1) {
       BOOKMARKS.splice(bIdx, 1); saveBookmarks(BOOKMARKS);
       if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
     }
-
   }
+
+  // Always play - clear callback to avoid loops
+  const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}`);
+  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
+  return;
 }
 
 if (args.queryParameters.uncheck) {
@@ -383,6 +392,19 @@ if (args.queryParameters.bookmark) {
     if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
   } else {
     BOOKMARKS.push({ title: args.queryParameters.title, link: bLink, source: args.queryParameters.source, date: args.queryParameters.date, desc: args.queryParameters.desc })
+  }
+  saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
+}
+
+if (args.queryParameters.favorite) {
+  const fLink = args.queryParameters.favorite
+  const idx = BOOKMARKS.findIndex(b => b.link === fLink)
+  if (idx > -1) {
+    // Toggle favorite status explicit
+    if (BOOKMARKS[idx].favorite) BOOKMARKS[idx].favorite = false
+    else BOOKMARKS[idx].favorite = true
+  } else {
+    BOOKMARKS.push({ title: args.queryParameters.title, link: fLink, source: args.queryParameters.source, date: args.queryParameters.date, desc: args.queryParameters.desc, favorite: true })
   }
   saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
@@ -462,7 +484,14 @@ async function renderReader() {
   if (fm.listContents(CACHE_DIR).length === 0 || isStale) await syncAllFeeds()
 
   let CACHED_ITEMS = []
-  if (CATEGORY === "BOOKMARKS") { CACHED_ITEMS = [...BOOKMARKS] }
+  if (CATEGORY === "BOOKMARKS") {
+    CACHED_ITEMS = [...BOOKMARKS].sort((a, b) => {
+      const favA = (a.favorite === true) ? 1 : 0;
+      const favB = (b.favorite === true) ? 1 : 0;
+      // High score (1) comes first descending
+      return favB - favA;
+    });
+  }
   else if (CATEGORY === "ALL SOURCES") {
     const files = fm.listContents(CACHE_DIR)
     for (const file of files) { CACHED_ITEMS.push(...JSON.parse(fm.readString(fm.joinPath(CACHE_DIR, file)))) }
@@ -597,9 +626,27 @@ async function renderReader() {
 
   <main id="newsContainer" class="pt-44 px-4 space-y-3">
   ${filteredPool.map((item, idx) => {
-    const hasRead = READ_HISTORY.includes(item.link); const isB = BOOKMARKS.some(b => b.link === item.link);
+    // Inject Headers for Bookmarks
+    let header = '';
+    if (CATEGORY === 'BOOKMARKS') {
+      const isFav = (item.favorite === true);
+      const prevFav = (filteredPool[idx - 1] && filteredPool[idx - 1].favorite === true);
+
+      if (idx === 0) {
+        if (isFav) header = '<h3 class="text-xs font-bold text-yellow-500 uppercase tracking-widest px-2 mb-2 mt-1 ml-1 border-b border-yellow-500/20 pb-1">⭐ Favorites</h3>';
+        else header = '<h3 class="text-xs font-bold text-orange-400 uppercase tracking-widest px-2 mb-2 mt-1 ml-1 border-b border-orange-500/20 pb-1">🔖 Reading List</h3>';
+      } else if (!isFav && prevFav) {
+        // Transition from Fav to Regular
+        header = '<h3 class="text-xs font-bold text-orange-400 uppercase tracking-widest px-2 mb-2 mt-8 ml-1 border-b border-orange-500/20 pb-1">🔖 Reading List</h3>';
+      }
+    }
+
+    const hasRead = READ_HISTORY.includes(item.link);
+    const existing = BOOKMARKS.find(b => b.link === item.link);
+    const isSaved = !!existing;
+    const isFav = existing && existing.favorite;
     const isNew = (new Date() - new Date(item.date)) < newCutoff;
-    return `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${item.title.toLowerCase()}" data-link="${item.link}" data-title="${item.title}" data-source="${item.source}" data-date="${item.date}" data-desc="${item.desc || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
+    return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${item.title.toLowerCase()}" data-link="${item.link}" data-title="${item.title}" data-source="${item.source}" data-date="${item.date}" data-desc="${item.desc || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
       <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check" onchange="updateBulkBar()"></div>
       <div class="px-4 pt-4 pb-2">
         <div class="flex justify-between items-baseline mb-1.5">
@@ -610,8 +657,9 @@ async function renderReader() {
         <p class="text-[13px] text-slate-400 mt-1 leading-snug line-clamp-2 pr-4">${item.desc || ''}</p>
         <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
           <div class="flex gap-6">
-            <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'check'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
-            <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isB ? 'text-orange-500' : 'text-slate-400'}">${isB ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isB ? 'text-orange-500' : 'text-slate-400'}">Save</span></div>
+            <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
+            <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[12px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'}">Save</span></div>
+            <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
           </div>
           <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(item.link)}&search=${encodeURIComponent(SEARCH_TERM)}" class="material-icons-round text-xl">link</a></div>
         </div>
