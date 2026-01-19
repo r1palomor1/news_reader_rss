@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V115.3
+// NEWS READER (RSS/ATOM) — V116.15
 // Protocol: v96.2 Engine 
-// Status: Fixed Old Bookmark Sorting Glitch
+// Status: Rogue Write Fixed (Favorites Loop Solved)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -15,6 +15,7 @@ const PREV_CAT_FILE = fm.joinPath(dir, "prev_category.txt")
 const PREV_PAGE_FILE = fm.joinPath(dir, "prev_page.txt")
 const HISTORY_FILE = fm.joinPath(dir, "read_history.json")
 const BOOKMARK_FILE = fm.joinPath(dir, "bookmarks.json")
+const FAV_FILE = fm.joinPath(dir, "favorites.json")
 const CACHE_DIR = fm.joinPath(dir, "news_cache")
 const TOGGLE_FILE = fm.joinPath(dir, "unread_toggle.txt")
 const VISIT_FILE = fm.joinPath(dir, "last_visit.txt")
@@ -45,13 +46,31 @@ function saveTags(path, tags) {
 
 function saveHistory(arr) { fm.writeString(HISTORY_FILE, JSON.stringify(arr)) }
 function saveBookmarks(arr) { fm.writeString(BOOKMARK_FILE, JSON.stringify(arr)) }
+function saveFavorites(arr) { fm.writeString(FAV_FILE, JSON.stringify(arr)) }
 
 let READ_HISTORY = await getJsonFile(HISTORY_FILE)
 let BOOKMARKS = await getJsonFile(BOOKMARK_FILE)
+let FAVORITES = await getJsonFile(FAV_FILE)
 let FEEDS = await getJsonFile(CONFIG_FILE)
 
+// Migration: Move V115 favorites to new file
+const favoritesToMove = BOOKMARKS.filter(b => b.favorite === true);
+if (favoritesToMove.length > 0) {
+  // Clean 'favorite' flag as it's implied by source now
+  const cleanFavs = favoritesToMove.map(f => { delete f.favorite; return f; });
+  FAVORITES.push(...cleanFavs);
+  BOOKMARKS = BOOKMARKS.filter(b => !b.favorite);
+  saveBookmarks(BOOKMARKS);
+  saveFavorites(FAVORITES);
+}
+
 let savedCat = fm.fileExists(CAT_FILE) ? fm.readString(CAT_FILE) : "ALL SOURCES"
-let CATEGORY = FEEDS.some(f => f.name === savedCat) || ["ALL SOURCES", "BOOKMARKS"].includes(savedCat) ? savedCat : "ALL SOURCES"
+// Logic Update: If URL param exists, use it AND SAVE IT immediately
+if (args.queryParameters.cat) {
+  savedCat = args.queryParameters.cat
+  fm.writeString(CAT_FILE, savedCat)
+}
+let CATEGORY = FEEDS.some(f => f.name === savedCat) || ["ALL SOURCES", "BOOKMARKS", "FAVORITES"].includes(savedCat) ? savedCat : "ALL SOURCES"
 
 let SHOW_UNREAD_ONLY = fm.fileExists(TOGGLE_FILE) ? fm.readString(TOGGLE_FILE) === "true" : true
 if (args.queryParameters.toggleUnread) {
@@ -81,9 +100,26 @@ const scriptName = Script.name()
 const scriptUrl = `scriptable:///run/${encodeURIComponent(scriptName)}`
 const searchParam = SEARCH_TERM ? `&search=${encodeURIComponent(SEARCH_TERM)}` : ""
 
-// Save previous category when navigating to Bookmarks
+// Helper to Centralize PrevCat Writes (Nuclear Option against Rogue Writes)
+function writePrevCategory(cat) {
+  if (!cat) return;
+  const c = cat.trim();
+  const virtuals = ["FAVORITES", "BOOKMARKS", "READ LATER"];
+
+  // Guard 1: Block Virtuals
+  if (virtuals.includes(c.toUpperCase())) return;
+
+  // Guard 2: Allowlist (True Feeds OR ALL SOURCES)
+  const isTrue = (c === "ALL SOURCES") || FEEDS.some(f => f.name === c);
+
+  if (isTrue) {
+    fm.writeString(PREV_CAT_FILE, c)
+  }
+}
+
+// Initial Logic: Handle incoming prevCat using the Safe Helper
 if (args.queryParameters.prevCat) {
-  fm.writeString(PREV_CAT_FILE, args.queryParameters.prevCat)
+  writePrevCategory(args.queryParameters.prevCat);
 }
 
 function getFirstTrueSource() {
@@ -352,22 +388,26 @@ if (args.queryParameters.showLogs) {
 
 if (args.queryParameters.listen) {
   const url = args.queryParameters.listen
-  const bIdx = BOOKMARKS.findIndex(b => b.link === url)
-  const isFav = bIdx > -1 && BOOKMARKS[bIdx].favorite
 
-  // ONLY mark as read/remove if NOT a favorite
-  if (!isFav) {
-    if (!READ_HISTORY.includes(url)) {
-      READ_HISTORY.push(url); saveHistory(READ_HISTORY)
-    }
-    if (bIdx > -1) {
-      BOOKMARKS.splice(bIdx, 1); saveBookmarks(BOOKMARKS);
-      if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
-    }
+  // Handling Read Later (Bookmarks) - Always remove after listening
+  const bIdx = BOOKMARKS.findIndex(b => b.link === url)
+  if (bIdx > -1) {
+    BOOKMARKS.splice(bIdx, 1); saveBookmarks(BOOKMARKS);
+    if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
+  }
+
+  // Handling History - Add if not already read
+  // (Optional: You said "don't dim favorites". If it's a favorite, maybe don't add to history?)
+  // Let's check if it is in Favorites first.
+  const isFav = FAVORITES.some(f => f.link === url);
+  if (!isFav && !READ_HISTORY.includes(url)) {
+    READ_HISTORY.push(url); saveHistory(READ_HISTORY)
   }
 
   // Always play - clear callback to avoid loops
-  const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}`);
+  // Update: Pass FULL State (Category + PrevCat)
+  const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
+  const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
   Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
   return;
 }
@@ -398,15 +438,16 @@ if (args.queryParameters.bookmark) {
 
 if (args.queryParameters.favorite) {
   const fLink = args.queryParameters.favorite
-  const idx = BOOKMARKS.findIndex(b => b.link === fLink)
+  const idx = FAVORITES.findIndex(b => b.link === fLink)
   if (idx > -1) {
-    // Toggle favorite status explicit
-    if (BOOKMARKS[idx].favorite) BOOKMARKS[idx].favorite = false
-    else BOOKMARKS[idx].favorite = true
+    // Remove from Favorites
+    FAVORITES.splice(idx, 1)
+    if (FAVORITES.length === 0 && CATEGORY === "FAVORITES") fm.writeString(CAT_FILE, getFirstTrueSource())
   } else {
-    BOOKMARKS.push({ title: args.queryParameters.title, link: fLink, source: args.queryParameters.source, date: args.queryParameters.date, desc: args.queryParameters.desc, favorite: true })
+    // Add to Favorites
+    FAVORITES.push({ title: args.queryParameters.title, link: fLink, source: args.queryParameters.source, date: args.queryParameters.date, desc: args.queryParameters.desc })
   }
-  saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
+  saveFavorites(FAVORITES); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
 if (args.queryParameters.externalLink) {
@@ -485,12 +526,10 @@ async function renderReader() {
 
   let CACHED_ITEMS = []
   if (CATEGORY === "BOOKMARKS") {
-    CACHED_ITEMS = [...BOOKMARKS].sort((a, b) => {
-      const favA = (a.favorite === true) ? 1 : 0;
-      const favB = (b.favorite === true) ? 1 : 0;
-      // High score (1) comes first descending
-      return favB - favA;
-    });
+    CACHED_ITEMS = [...BOOKMARKS]; // Read Later - Raw List
+  }
+  else if (CATEGORY === "FAVORITES") {
+    CACHED_ITEMS = [...FAVORITES]; // Perm Favorites
   }
   else if (CATEGORY === "ALL SOURCES") {
     const files = fm.listContents(CACHE_DIR)
@@ -588,9 +627,9 @@ async function renderReader() {
 <body class="pb-32">
   <header class="fixed top-0 left-0 right-0 z-40 glass">
     <div class="px-5 pt-3 pb-2 flex justify-between items-center">
-      <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}'">
-        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${CATEGORY} ▼</h1>
-        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} ${CATEGORY === 'BOOKMARKS' ? 'Saved' : (SHOW_UNREAD_ONLY ? 'Unread' : 'ALL ITEMS')}</span>
+      <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')">
+        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${CATEGORY === 'BOOKMARKS' ? 'READ LATER' : CATEGORY} ▼</h1>
+        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} ${CATEGORY === 'BOOKMARKS' ? 'Items' : (SHOW_UNREAD_ONLY ? 'Unread' : 'ALL ITEMS')}</span>
       </div>
       <div class="flex gap-4 items-center">
         <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
@@ -616,37 +655,34 @@ async function renderReader() {
   </header>
 
   <div id="actionMenu">
-    ${CATEGORY === 'BOOKMARKS' ? `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(returnSource)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>` : `<div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevCat=${encodeURIComponent(CATEGORY)}&prevPage=${PAGE}'" class="menu-item"><span class="material-icons-round text-orange-500">bookmarks</span><span>Bookmarks</span></div>`}
-    <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}'" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
+    ${(CATEGORY === 'BOOKMARKS' || CATEGORY === 'FAVORITES') ? (() => {
+      const p = args.queryParameters.prevCat;
+      const validP = (p && p !== "FAVORITES" && p !== "BOOKMARKS" && p !== "READ LATER") ? p : returnSource;
+      return `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(validP)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>`;
+    })() : ''}
+    <div onclick="window.location.href='${scriptUrl}?cat=FAVORITES&prevCat=${encodeURIComponent(CATEGORY)}&prevPage=${PAGE}'" class="menu-item"><span class="material-icons-round text-yellow-400">star</span><span>Favorites</span></div>
+    <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevCat=${encodeURIComponent(CATEGORY)}&prevPage=${PAGE}'" class="menu-item"><span class="material-icons-round text-orange-500">bookmark</span><span>Read Later</span></div>
+    <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
     <div onclick="openTagEditor()" class="menu-item"><span class="material-icons-round text-green-400">label</span><span>Tag Editor</span></div>
     <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
-    <div onclick="window.location.href='${scriptUrl}?showLogs=true&page=${PAGE}'" class="menu-item"><span class="material-icons-round text-slate-500">bug_report</span><span>Debug Logs</span></div>
-    <div onclick="window.location.href='${scriptUrl}?refresh=true'" class="menu-item"><span class="material-icons-round text-slate-400">refresh</span><span>Refresh All</span></div>
+    <div onclick="window.location.href='${scriptUrl}?showLogs=true&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-slate-500">bug_report</span><span>Debug Logs</span></div>
+    <div onclick="window.location.href='${scriptUrl}?refresh=true&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-slate-400">refresh</span><span>Refresh All</span></div>
   </div>
 
   <main id="newsContainer" class="pt-44 px-4 space-y-3">
   ${filteredPool.map((item, idx) => {
-    // Inject Headers for Bookmarks
-    let header = '';
-    if (CATEGORY === 'BOOKMARKS') {
-      const isFav = (item.favorite === true);
-      const prevFav = (filteredPool[idx - 1] && filteredPool[idx - 1].favorite === true);
+      // Headers removed for Split Source UI
+      const header = '';
 
-      if (idx === 0) {
-        if (isFav) header = '<h3 class="text-xs font-bold text-yellow-500 uppercase tracking-widest px-2 mb-2 mt-1 ml-1 border-b border-yellow-500/20 pb-1">⭐ Favorites</h3>';
-        else header = '<h3 class="text-xs font-bold text-orange-400 uppercase tracking-widest px-2 mb-2 mt-1 ml-1 border-b border-orange-500/20 pb-1">🔖 Reading List</h3>';
-      } else if (!isFav && prevFav) {
-        // Transition from Fav to Regular
-        header = '<h3 class="text-xs font-bold text-orange-400 uppercase tracking-widest px-2 mb-2 mt-8 ml-1 border-b border-orange-500/20 pb-1">🔖 Reading List</h3>';
-      }
-    }
+      const hasRead = READ_HISTORY.includes(item.link);
+      const isSaved = BOOKMARKS.some(b => b.link === item.link);
+      const isFav = FAVORITES.some(f => f.link === item.link);
+      const isNew = (new Date() - new Date(item.date)) < newCutoff;
 
-    const hasRead = READ_HISTORY.includes(item.link);
-    const existing = BOOKMARKS.find(b => b.link === item.link);
-    const isSaved = !!existing;
-    const isFav = existing && existing.favorite;
-    const isNew = (new Date() - new Date(item.date)) < newCutoff;
-    return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${item.title.toLowerCase()}" data-link="${item.link}" data-title="${item.title}" data-source="${item.source}" data-date="${item.date}" data-desc="${item.desc || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
+      // UI Logic: Hide "Later" button if in Favorites Source
+      const showSave = CATEGORY !== 'FAVORITES';
+
+      return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${item.title.toLowerCase()}" data-link="${item.link}" data-title="${item.title}" data-source="${item.source}" data-date="${item.date}" data-desc="${item.desc || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
       <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check" onchange="updateBulkBar()"></div>
       <div class="px-4 pt-4 pb-2">
         <div class="flex justify-between items-baseline mb-1.5">
@@ -658,7 +694,7 @@ async function renderReader() {
         <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
           <div class="flex gap-6">
             <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
-            <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[12px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'}">Save</span></div>
+            <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[10px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'} whitespace-nowrap">Read Later</span></div>
             <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
           </div>
           <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(item.link)}&search=${encodeURIComponent(SEARCH_TERM)}" class="material-icons-round text-xl">link</a></div>
@@ -1034,7 +1070,8 @@ async function renderMenu() {
   <body>
     <header class="fixed top-0 left-0 right-0 z-40 bg-slate-900 border-b border-slate-800 px-5 py-4 flex justify-between items-center"><h1 class="text-sm font-bold tracking-widest uppercase text-slate-400">Select Source</h1><a href="${scriptUrl}?state=MANAGER" class="p-2 bg-slate-800 rounded-full border border-orange-500/50"><span class="material-icons-round text-orange-400">tune</span></a></header>
     <main class="pt-24 px-4 space-y-3 pb-10">
-      <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevPage=${PAGE}'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between"><span>🔖 BOOKMARKS</span><span>${BOOKMARKS.length}</span></div>
+      <div onclick="window.location.href='${scriptUrl}?cat=FAVORITES&prevPage=${PAGE}'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold text-yellow-500 border border-yellow-500/20"><span>⭐ FAVORITES</span><span>${FAVORITES.length}</span></div>
+      <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevPage=${PAGE}'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold text-orange-500 border border-orange-500/20"><span>🔖 READ LATER</span><span>${BOOKMARKS.length}</span></div>
       <div onclick="window.location.href='${scriptUrl}?cat=ALL+SOURCES'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold"><span>🌟 ALL SOURCES ${anyGlobalNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span>${totalSum}</span></div>
       ${sortedCounts.map(res => `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(res.name)}'" class="p-4 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-center"><span class="text-slate-300 flex items-center">${res.favorite ? '⭐ ' : ''}${res.name} ${res.hasNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span class="text-slate-400">${res.count}</span></div>`).join('')}
     </main>
@@ -1124,7 +1161,8 @@ if (args.queryParameters.cat) {
     if (fm.fileExists(PREV_PAGE_FILE)) targetPage = parseInt(fm.readString(PREV_PAGE_FILE));
   }
 
-  if (CATEGORY !== "BOOKMARKS") fm.writeString(PREV_CAT_FILE, CATEGORY)
+  // Use Centralized Safe Writer
+  writePrevCategory(CATEGORY);
   fm.writeString(CAT_FILE, args.queryParameters.cat);
   Safari.open(`${scriptUrl}?page=${targetPage}`);
   return

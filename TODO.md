@@ -100,20 +100,12 @@
 - [ ] Add "Cancel" button to Text Editor to return to Quick Edit without saving?
 
 
-### Permanent Favorites (vs Temporary Bookmarks) Refactor
-**Status:** **REFACTOR REQUIRED (V116 Plan)**
-**Current Issue:** V115.x Mixed List approach failed with legacy data.
-**New Plan (Separate Sources):**
-1.  **Split Data:** Create separate `FAVORITES` array/source.
-2.  **UI:** "Bookmarks" Source (remains "Read Later"). "Favorites" Source (new, permanent library).
-3.  **Buttons:**
-    - Save: Adds to Bookmarks (Temp).
-    - Fav: Adds to Favorites (Perm).
-    - In Favorites Source: "Save" button disabled/hidden.
-4.  **Un-Fav Logic:**
-    - Click Star in Favorites -> Toast: "Convert to Bookmark or Remove completely?" (or just remove).
+### ✅ Permanent Favorites (Split Sources)
+**Status:** DONE - V116.0
+- **Logic:** Created `FAVORITES` source. Renamed Bookmarks to `Read Later`.
+- **UI:** Independant "Later" and "Fav" buttons.
+- **Migration:** Auto-moves existing V115 favorites to new file.
 
-**Phase:** Next Session.
 
 ---
 
@@ -146,6 +138,8 @@
 - Show "Cluster Cards" (e.g., "Tesla — 18 articles • 6 sources").
 - Click to expand.
 **Result:** Story-centric feed instead of headline flood.
+
+
 
 ### 4. HEADLINE DEDUPLICATION
 **Objective:** Collapse near-duplicate headlines.
