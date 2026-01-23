@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V116.15
+// NEWS READER (RSS/ATOM) — V117.4
 // Protocol: v96.2 Engine 
-// Status: Rogue Write Fixed (Favorites Loop Solved)
+// Status: Smart Clustering (Optimized Loop)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -52,6 +52,7 @@ let READ_HISTORY = await getJsonFile(HISTORY_FILE)
 let BOOKMARKS = await getJsonFile(BOOKMARK_FILE)
 let FAVORITES = await getJsonFile(FAV_FILE)
 let FEEDS = await getJsonFile(CONFIG_FILE)
+logToFile(`[Init] Script Loaded: V117.2 (Time: ${new Date().toLocaleTimeString()})`);
 
 // Migration: Move V115 favorites to new file
 const favoritesToMove = BOOKMARKS.filter(b => b.favorite === true);
@@ -519,6 +520,82 @@ if (args.queryParameters.reopenTagEditor) {
   const autoOpenTagEditor = true
 }
 
+// --- CLUSTERING LOGIC (V117 - Tuned) ---
+
+function getJaccardSimilarity(str1, str2) {
+  // Common news noise words to ignore - prevents clustering "Breaking News: Cat" with "Breaking News: Dog"
+  const STOP_WORDS = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'from', 'news', 'live', 'update', 'breaking', 'video', 'watch', 'photos', 'exclusive', 'report', 'analysis', 'today', 'week', 'year', 'month', 'daily', 'review', 'guide', 'best', 'what', 'when', 'where']);
+
+  const tokenize = s => new Set(
+    s.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+  );
+
+  const a = tokenize(str1);
+  const b = tokenize(str2);
+
+  if (a.size === 0 || b.size === 0) return 0; // Prevent div by zero if title is all stop words
+
+  const intersection = new Set([...a].filter(x => b.has(x)));
+  const union = new Set([...a, ...b]);
+
+  return union.size === 0 ? 0 : intersection.size / union.size;
+}
+
+function groupArticles(items) {
+  const clusters = [];
+  // Increased Threshold (0.45) = Moderate matching.
+  // Needs ~45% distinct word overlap.
+  // Increased Threshold (0.40) = Aggressive matching.
+  // Needs ~40% distinct word overlap.
+  const SIMILARITY_THRESHOLD = 0.40;
+  const TIME_WINDOW = 36 * 60 * 60 * 1000; // 36 Hours
+
+  items.forEach(newItem => {
+    let matchIdx = -1;
+    // Iterate backwards to find recent matches first
+    for (let i = clusters.length - 1; i >= 0; i--) {
+      const existing = clusters[i];
+      const targetTitle = existing.type === 'cluster' ? existing.primaryItem.title : existing.title;
+      const targetDate = existing.type === 'cluster' ? existing.primaryItem.date : existing.date;
+
+      // OPTIMIZATION: Since we iterate backwards (from closest time to farthest), 
+      // if we hit a cluster outside the window, we can stop searching entirely.
+      if (Math.abs(new Date(newItem.date) - new Date(targetDate)) > TIME_WINDOW) break;
+
+      const score = getJaccardSimilarity(newItem.title, targetTitle);
+      if (score >= SIMILARITY_THRESHOLD) {
+        logToFile(`[Cluster] Match Found: "${newItem.title}" linked to "${targetTitle}" (Score: ${score.toFixed(2)})`);
+        matchIdx = i;
+        break;
+      }
+    }
+
+    if (matchIdx > -1) {
+      const match = clusters[matchIdx];
+      if (match.type === 'cluster') {
+        match.relatedItems.push(newItem);
+      } else {
+        // Convert single to cluster
+        clusters[matchIdx] = {
+          type: 'cluster',
+          primaryItem: match,
+          relatedItems: [newItem],
+          date: match.date, // Keep sort order of primary
+          source: match.source,
+          link: match.link,
+          title: match.title
+        };
+      }
+    } else {
+      clusters.push(newItem);
+    }
+  });
+  return clusters;
+}
+
 async function renderReader() {
   const lastVisit = fm.fileExists(VISIT_FILE) ? parseInt(fm.readString(VISIT_FILE)) : 0
   const isStale = (Date.now() - lastVisit) > (10 * 60 * 1000)
@@ -539,6 +616,11 @@ async function renderReader() {
     CACHED_ITEMS = fm.fileExists(path) ? JSON.parse(fm.readString(path)) : []
   }
   CACHED_ITEMS.sort((a, b) => new Date(b.date) - new Date(a.date))
+
+  // DEBUGGING V117.4: FORCE Clusters to Top
+  // This logic is moved inside renderReader later, but we need the sorting function here
+  // to prioritize clusters for visibility.
+
 
   const pulseTags = (items) => {
     let rawCounts = {};
@@ -606,7 +688,21 @@ async function renderReader() {
   const pulseTagsList = pulseData.tags;
   const pulseTagArticles = pulseData.articles;
   const heatThreshold = (CATEGORY === "ALL SOURCES") ? 8 : 4;
-  let filteredPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
+  let rawPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
+
+  // V117: Apply Clustering
+  logToFile(`[Render] Starting Clustering. Input: ${rawPool.length} items.`);
+  let filteredPool = groupArticles(rawPool);
+  logToFile(`[Render] Clustering Done. Output: ${filteredPool.length} items. (Diff: ${rawPool.length - filteredPool.length})`);
+
+  // V117.4: Force Clusters to Top of Feed for Verification
+  logToFile(`[Render] Sorting: Promoting ${filteredPool.filter(i => i.type === 'cluster').length} clusters to top.`);
+  filteredPool.sort((a, b) => {
+    if (a.type === 'cluster' && b.type !== 'cluster') return -1;
+    if (a.type !== 'cluster' && b.type === 'cluster') return 1;
+    return new Date(b.date) - new Date(a.date);
+  });
+
   const totalCount = filteredPool.length;
   const startIdx = (PAGE - 1) * ITEMS_PER_PAGE;
   const returnSource = fm.fileExists(PREV_CAT_FILE) ? fm.readString(PREV_CAT_FILE) : "ALL SOURCES";
@@ -629,7 +725,7 @@ async function renderReader() {
     <div class="px-5 pt-3 pb-2 flex justify-between items-center">
       <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')">
         <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${CATEGORY === 'BOOKMARKS' ? 'READ LATER' : CATEGORY} ▼</h1>
-        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} ${CATEGORY === 'BOOKMARKS' ? 'Items' : (SHOW_UNREAD_ONLY ? 'Unread' : 'ALL ITEMS')}</span>
+        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} Items (${filteredPool.filter(i => i.type === 'cluster').length} Groups) • V117.4</span>
       </div>
       <div class="flex gap-4 items-center">
         <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
@@ -674,12 +770,61 @@ async function renderReader() {
       // Headers removed for Split Source UI
       const header = '';
 
+      if (item.type === 'cluster') {
+        // CLUSTER CARD RENDERING
+        const p = item.primaryItem;
+        const count = item.relatedItems.length;
+        const hasRead = READ_HISTORY.includes(p.link);
+        const isSaved = BOOKMARKS.some(b => b.link === p.link);
+        const isFav = FAVORITES.some(f => f.link === p.link);
+        const isNew = (new Date() - new Date(p.date)) < newCutoff;
+
+        // Aggregate Sources
+        const sources = [p.source, ...item.relatedItems.map(r => r.source)];
+        const uniqueSources = [...new Set(sources)];
+        const sourceLabel = uniqueSources.length > 1 ? `${uniqueSources.length} SOURCES` : p.source;
+
+        return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-indigo-500/80 shadow-lg transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${p.title.toLowerCase()}" data-link="${p.link}" data-title="${p.title}" data-source="${p.source}" data-date="${p.date}" data-desc="${p.desc || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
+          <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check" onchange="updateBulkBar()"></div>
+          <div class="px-4 pt-4 pb-2">
+            <div class="flex justify-between items-baseline mb-1.5">
+              <div class="flex items-center gap-2">
+                 <span class="text-[12px] font-bold uppercase text-blue-400">${sourceLabel}</span>
+                 <span class="text-[9px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded font-black tracking-tighter">+${count} MORE</span>
+                 ${isNew ? '<span class="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-black tracking-tighter">NEW</span>' : ''}
+              </div>
+              <span class="text-[12px] font-medium text-slate-400 uppercase mr-10">${formatDateTime(p.date)}</span>
+            </div>
+            <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10">${p.title}</h2>
+            
+            <!-- Accordion Details (Hidden by default) -->
+            <details class="group mt-2">
+                <summary class="list-none cursor-pointer text-[11px] text-blue-400 font-bold uppercase tracking-wide flex items-center gap-1">
+                   <span>View Coverage</span>
+                   <span class="material-icons-round text-sm transition-transform group-open:rotate-180">expand_more</span>
+                </summary>
+                <div class="mt-2 space-y-2 border-t border-slate-800/50 pt-2">
+                   ${item.relatedItems.map(r => `<div class="flex justify-between items-center"><span class="text-[12px] text-slate-400 truncate w-2/3">${r.source}: ${r.title}</span><a href="${scriptUrl}?externalLink=${encodeURIComponent(r.link)}" class="text-[11px] text-blue-500">Read</a></div>`).join('')}
+                </div>
+            </details>
+
+            <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
+              <div class="flex gap-6">
+                <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
+                <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[10px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'} whitespace-nowrap">Read Later</span></div>
+                <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
+              </div>
+              <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(p.link)}&search=${encodeURIComponent(SEARCH_TERM)}" class="material-icons-round text-xl">link</a></div>
+            </div>
+          </div>
+        </article>`
+      }
+
+      // STANDARD ITEM RENDERING (Fallback)
       const hasRead = READ_HISTORY.includes(item.link);
       const isSaved = BOOKMARKS.some(b => b.link === item.link);
       const isFav = FAVORITES.some(f => f.link === item.link);
       const isNew = (new Date() - new Date(item.date)) < newCutoff;
-
-      // UI Logic: Hide "Later" button if in Favorites Source
       const showSave = CATEGORY !== 'FAVORITES';
 
       return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${item.title.toLowerCase()}" data-link="${item.link}" data-title="${item.title}" data-source="${item.source}" data-date="${item.date}" data-desc="${item.desc || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
