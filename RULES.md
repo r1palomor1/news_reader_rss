@@ -11,6 +11,7 @@
    - Verify variables exist before using them.
 
 3. **NO GIT REVERTS:**
-   - Use `replace_file_content` to undo.
+   **NO GIT CHECKOUTS:**
+   - Request approval first to Use `replace_file_content` to undo.
 
 **PENALTY FOR VIOLATION:** IMMEDIATE STOP.
