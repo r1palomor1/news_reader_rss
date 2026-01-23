@@ -112,16 +112,33 @@
 ## 🧠 Cognitive Load Reduction Strategy (Proposed)
 *Goal: Reduce visible article count from ~800 to ~50 manageable items without hiding content.*
 
-### 1. TIME-BASED BUCKETING (Primary Reduction Layer)
-**Objective:** Group articles by recency before sorting/filtering.
-**Buckets:**
-- **HOT:** < 6 hours
-- **TODAY:** 6-24 hours
-- **YESTERDAY:** 24-48 hours
-- **OLDER:** > 48 hours (Collapsed by default)
-**UI:** Render headers for each bucket. Collapse "Older".
+### 1. SMART CLUSTERING (V117.0 - Priority Phase 1)
+**Objective:** Reduce feed noise by grouping similar headlines (Deduplication).
 
-### 2. SOURCE WEIGHTING (Soft Ranking)
+**Logic:**
+- **Algorithm:** Jaccard Similarity (Word Overlap > 60%).
+- **Scope:** Compare against articles within +/- 36 hours (Pull-Forward Logic).
+- **UI:** 
+  - Show "Cluster Card" with the newest headline.
+  - Badge: "+ 3 similar sources".
+  - Tap to Expand (Accordion).
+  - Swipe to "Mark Cluster Read" (Clears all matched items).
+
+### 2. TIME-BASED DASHBOARD (V118.0 - Phase 2)
+**Objective:** Replace infinite scrolling with a bucketed dashboard.
+
+**Logic:**
+- **Buckets:** Hot (<6h), Today (6-24h), Yesterday (24-48h), Older (>48h).
+- **Interaction:** Collapsed accordions, Batch 30 items, Mark Visible Read.
+
+### 3. FOOTER SELECT ALL (UX Improvement)
+**Objective:** Allow bulk selection of all visible items from the footer.
+**Logic:**
+- Add "Select All Visible" button below pagination.
+- onClick: Iterates visible cards, checks check-boxes, triggers `updateBulkBar()`.
+- Result: Activates standard Bulk Action Bar (Listen, Save, Read).
+
+### 4. SOURCE WEIGHTING (Soft Ranking)
 **Objective:** Surface trusted sources higher within buckets.
 **Logic:**
 - Favorite Source: +3 points

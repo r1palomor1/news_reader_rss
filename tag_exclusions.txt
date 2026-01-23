@@ -1,0 +1,10 @@
+Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday,January,February,March,April,May,June,July,August,September,October,November,December,Update,News,Today,Here
+Jan.,Feb.,Mar.,Apr.,May.,Jun.,Jul.,Aug.,Sep.,Oct.,Nov.,Dec.
+U.S.,U.S,"U.S."
+One,You
+Here,Today,Watch,Live, Podcast
+One
+Here
+U.S.
+U.S
+Takeout
