@@ -123,6 +123,7 @@
   - Badge: "+ 3 similar sources".
   - Tap to Expand (Accordion).
   - Swipe to "Mark Cluster Read" (Clears all matched items).
+  - **Review:** Current match rate ~4% (39/942). Add TODO to revisit algorithm (Cosine Similarity or TF-IDF?).
 
 ### 2. TIME-BASED DASHBOARD (V118.0 - Phase 2)
 **Objective:** Replace infinite scrolling with a bucketed dashboard.
