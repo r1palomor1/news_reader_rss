@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V117.5.6
+// NEWS READER (RSS/ATOM) — V117.5.7
 // Protocol: v96.2 Engine 
-// Status: Single-Card Fix (JS Syntax) • Robust Bulk Operations
+// Status: Cluster Source Tuning & Hard Deduplication
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -567,51 +567,62 @@ function getJaccardSimilarity(str1, str2) {
 }
 
 function groupArticles(items) {
+  // 1. Hard Deduplication: Remove items with the exact same URL first
+  const uniqueItems = [];
+  const seenLinks = new Set();
+  items.forEach(item => {
+    if (!seenLinks.has(item.link)) {
+      seenLinks.add(item.link);
+      uniqueItems.push(item);
+    }
+  });
+
   const clusters = [];
-  // Increased Threshold (0.45) = Moderate matching.
-  // Needs ~45% distinct word overlap.
-  // Increased Threshold (0.40) = Aggressive matching.
-  // Needs ~40% distinct word overlap.
   const SIMILARITY_THRESHOLD = 0.40;
   const TIME_WINDOW = 36 * 60 * 60 * 1000; // 36 Hours
 
-  items.forEach(newItem => {
+  uniqueItems.forEach(newItem => {
     let matchIdx = -1;
     // Iterate backwards to find recent matches first
     for (let i = clusters.length - 1; i >= 0; i--) {
       const existing = clusters[i];
-      const targetTitle = existing.type === 'cluster' ? existing.primaryItem.title : existing.title;
-      const targetDate = existing.type === 'cluster' ? existing.primaryItem.date : existing.date;
+      const target = existing.type === 'cluster' ? existing.primaryItem : existing;
+      const targetDate = target.date;
 
-      // OPTIMIZATION: Since we iterate backwards (from closest time to farthest), 
-      // if we hit a cluster outside the window, we can stop searching entirely.
+      // OPTIMIZATION: If we hit a cluster outside the window, stop searching.
       if (Math.abs(new Date(newItem.date) - new Date(targetDate)) > TIME_WINDOW) break;
 
-      const score = getJaccardSimilarity(newItem.title, targetTitle);
+      const score = getJaccardSimilarity(newItem.title, target.title);
       if (score >= SIMILARITY_THRESHOLD) {
-        logToFile(`[Cluster] Match Found: "${newItem.title}" linked to "${targetTitle}" (Score: ${score.toFixed(2)})`);
-        matchIdx = i;
+        // SOURCE GUARD: Only cluster if sources are different.
+        // If sources are identical, it's a story update. Since we process newest first,
+        // we discard the older version (newItem) to avoid "CBS News + 1 More (CBS News)".
+        if (newItem.source === target.source) {
+          matchIdx = -2; // Signal to discard
+        } else {
+          matchIdx = i;
+        }
         break;
       }
     }
 
-    if (matchIdx > -1) {
+    if (matchIdx >= 0) {
       const match = clusters[matchIdx];
       if (match.type === 'cluster') {
         match.relatedItems.push(newItem);
       } else {
-        // Convert single to cluster
         clusters[matchIdx] = {
           type: 'cluster',
           primaryItem: match,
           relatedItems: [newItem],
-          date: match.date, // Keep sort order of primary
+          date: match.date,
           source: match.source,
           link: match.link,
-          title: match.title
+          title: match.title,
+          desc: match.desc // Preservation for UI
         };
       }
-    } else {
+    } else if (matchIdx === -1) {
       clusters.push(newItem);
     }
   });
@@ -747,7 +758,7 @@ async function renderReader() {
     <div class="px-5 pt-3 pb-2 flex justify-between items-center">
       <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')">
         <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${CATEGORY === 'BOOKMARKS' ? 'READ LATER' : CATEGORY} ▼</h1>
-        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} Items (${filteredPool.filter(i => i.type === 'cluster').length} Groups) • V117.5.6</span>
+        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} Items (${filteredPool.filter(i => i.type === 'cluster').length} Groups) • V117.5.7</span>
       </div>
       <div class="flex gap-4 items-center">
         <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
