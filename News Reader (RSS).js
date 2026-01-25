@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V117.5.7
+// NEWS READER (RSS/ATOM) — V118.0
 // Protocol: v96.2 Engine 
-// Status: Cluster Source Tuning & Hard Deduplication
+// Status: Master File Architecture (Optimized Loading)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -19,7 +19,7 @@ const FAV_FILE = fm.joinPath(dir, "favorites.json")
 const CACHE_DIR = fm.joinPath(dir, "news_cache")
 const TOGGLE_FILE = fm.joinPath(dir, "unread_toggle.txt")
 const VISIT_FILE = fm.joinPath(dir, "last_visit.txt")
-const MASTER_FILE = fm.joinPath(dir, "master_titles.txt")
+const MASTER_FEED_FILE = fm.joinPath(dir, "master_feed.json")
 // New Tag Editor Files
 const EXCLUSION_FILE = fm.joinPath(dir, "tag_exclusions.txt")
 const INCLUSION_FILE = fm.joinPath(dir, "tag_inclusions.txt")
@@ -138,19 +138,41 @@ function getExpiryCutoffMs() { return 3 * 24 * 60 * 60 * 1000 }
 
 // --- MASTER FILE LOGIC ---
 
-async function generateMasterTitles() {
+// --- MASTER FILE LOGIC ---
+
+async function generateMasterFeed() {
   const files = fm.listContents(CACHE_DIR)
-  let masterContent = "SOURCE|TITLE|LINK|DATE\n"
+  let allItems = []
+
+  // Aggregate all source files
   for (const file of files) {
+    if (!file.endsWith(".json")) continue
     const path = fm.joinPath(CACHE_DIR, file)
-    const data = JSON.parse(fm.readString(path))
-    const unread = data.filter(item => !READ_HISTORY.includes(item.link))
-    unread.forEach(item => {
-      const cleanTitle = item.title.replace(/\|/g, "-")
-      masterContent += `${item.source}|${cleanTitle}|${item.link}|${item.date}\n`
-    })
+    try {
+      const data = JSON.parse(fm.readString(path))
+      allItems.push(...data)
+    } catch (e) { continue }
   }
-  fm.writeString(MASTER_FILE, masterContent)
+
+  // Deduplicate by Link (Safety)
+  const seen = new Set();
+  const unique = [];
+  allItems.forEach(item => {
+    if (!seen.has(item.link)) {
+      seen.add(item.link);
+      unique.push(item);
+    }
+  });
+
+  // Sort by Date (Newest First)
+  unique.sort((a, b) => new Date(b.date) - new Date(a.date))
+
+  // CAP SIZE: Keep top 1000 to prevent memory crashes
+  const capped = unique.slice(0, 1000)
+
+  // Write Master File
+  fm.writeString(MASTER_FEED_FILE, JSON.stringify(capped))
+  logToFile(`[Master] Generated Master Feed with ${capped.length} items (Pool: ${unique.length})`)
 }
 
 // --- CORE UTILITIES ---
@@ -210,7 +232,7 @@ async function syncAllFeeds() {
     </body></html>`
   await hud.loadHTML(hudHtml); hud.present(false)
   await Promise.all(enabledFeeds.map(f => fetchSingleFeed(f.url, f.name)));
-  await generateMasterTitles()
+  await generateMasterFeed()
   fm.writeString(VISIT_FILE, String(Date.now()))
 }
 
@@ -342,13 +364,13 @@ if (args.queryParameters.playall) {
   try {
     const urls = args.queryParameters.urls;
     const readLinks = args.queryParameters.readLinks ? JSON.parse(decodeURIComponent(args.queryParameters.readLinks)) : urls.split(',');
-    
+
     readLinks.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) });
     saveHistory(READ_HISTORY);
-    
+
     const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}${searchParam}`);
     Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(urls)}&x-success=${callback}`);
-  } catch(e) {
+  } catch (e) {
     new Alert().addCancelAction("Bulk Transfer Error: Selection too large for URL scheme. Try selecting fewer items.").present();
   }
   return;
@@ -374,7 +396,7 @@ if (args.queryParameters.bulkBookmark) {
     saveBookmarks(BOOKMARKS);
     readLinks.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) });
     saveHistory(READ_HISTORY);
-  } catch(e) {
+  } catch (e) {
     new Alert().addCancelAction("Bulk Bookmark Error: Selection too large. Try fewer items.").present();
   }
   Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
@@ -632,7 +654,12 @@ function groupArticles(items) {
 async function renderReader() {
   const lastVisit = fm.fileExists(VISIT_FILE) ? parseInt(fm.readString(VISIT_FILE)) : 0
   const isStale = (Date.now() - lastVisit) > (10 * 60 * 1000)
-  if (fm.listContents(CACHE_DIR).length === 0 || isStale) await syncAllFeeds()
+
+  // V118 Grace Period: Only auto-sync if stale AND we are on the Home Page (Page 1).
+  // This prevents interrupting the user if they are deep in pagination (Page 2+).
+  if (fm.listContents(CACHE_DIR).length === 0 || (isStale && PAGE === 1)) {
+    await syncAllFeeds()
+  }
 
   let CACHED_ITEMS = []
   if (CATEGORY === "BOOKMARKS") {
@@ -642,9 +669,23 @@ async function renderReader() {
     CACHED_ITEMS = [...FAVORITES]; // Perm Favorites
   }
   else if (CATEGORY === "ALL SOURCES") {
-    const files = fm.listContents(CACHE_DIR)
-    for (const file of files) { CACHED_ITEMS.push(...JSON.parse(fm.readString(fm.joinPath(CACHE_DIR, file)))) }
+    // V118: Master File Optimization
+    // Instead of reading 20 files, we read ONE master file.
+    if (fm.fileExists(MASTER_FEED_FILE)) {
+      try {
+        CACHED_ITEMS = JSON.parse(fm.readString(MASTER_FEED_FILE))
+      } catch (e) {
+        // Fallback if master corrupt
+        CACHED_ITEMS = []
+        await syncAllFeeds()
+        CACHED_ITEMS = JSON.parse(fm.readString(MASTER_FEED_FILE))
+      }
+    } else {
+      await syncAllFeeds()
+      CACHED_ITEMS = JSON.parse(fm.readString(MASTER_FEED_FILE))
+    }
   } else {
+    // Single Source Mode (Reads individual file)
     const path = fm.joinPath(CACHE_DIR, CATEGORY.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json")
     CACHED_ITEMS = fm.fileExists(path) ? JSON.parse(fm.readString(path)) : []
   }
@@ -1352,7 +1393,11 @@ async function validateUrl(url) {
 if (args.queryParameters.addFeed) {
   const newName = args.queryParameters.name; const newUrl = args.queryParameters.url;
   let validation = await validateUrl(newUrl);
-  if (validation.status === "green") { await fetchSingleFeed(newUrl, newName); }
+  if (validation.status === "green") {
+    await fetchSingleFeed(newUrl, newName);
+    // UPDATE MASTER FILE immediately so it appears without full refresh
+    await generateMasterFeed();
+  }
   FEEDS.push({ name: newName, url: newUrl, enabled: true, validation: validation.status, validated: (validation.status === "green"), format: validation.format });
   fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS)); Safari.open(`${scriptUrl}?state=MANAGER`); return
 }
