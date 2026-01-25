@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V118.6
+// NEWS READER (RSS/ATOM) — V118.8
 // Protocol: v96.2 Engine 
-// Status: Clustering Tuned (Synonyms + Dynamic Thresholds)
+// Status: V118.8 Stable (High Density Clustering)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -47,6 +47,9 @@ function saveTags(path, tags) {
 function saveHistory(arr) { fm.writeString(HISTORY_FILE, JSON.stringify(arr)) }
 function saveBookmarks(arr) { fm.writeString(BOOKMARK_FILE, JSON.stringify(arr)) }
 function saveFavorites(arr) { fm.writeString(FAV_FILE, JSON.stringify(arr)) }
+
+// Global Stats Object (Moved to Top Scope to fix ReferenceError)
+const CLUSTER_STATS = { compared: 0, matched: 0, rejectedByThreshold: 0, rejectedByTime: 0, shortTitleBoosts: 0 };
 
 let READ_HISTORY = await getJsonFile(HISTORY_FILE)
 let BOOKMARKS = await getJsonFile(BOOKMARK_FILE)
@@ -575,11 +578,12 @@ if (args.queryParameters.reopenTagEditor) {
 
 // --- CLUSTERING LOGIC (V118.6 - Enhanced) ---
 
-function getJaccardSimilarity(str1, str2) {
-  // V118.6: Refined Stop Words (Removed 'review', 'guide', 'best' to preserve context)
-  const STOP_WORDS = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'from', 'news', 'live', 'update', 'breaking', 'video', 'watch', 'photos', 'exclusive', 'report', 'analysis', 'today', 'week', 'year', 'month', 'daily', 'what', 'when', 'where', 'who']);
+// --- CLUSTERING LOGIC (V118.8 - High Density) ---
 
-  // V118.6: Synonym Map (Collapse common news terms)
+function getJaccardSimilarity(titleA, titleB) {
+  const HARD_STOP_WORDS = new Set(['breaking', 'live', 'update', 'video', 'watch', 'photos', 'the', 'and', 'for', 'with', 'this', 'that', 'from', 'news', 'exclusive', 'report', 'today', 'what', 'when', 'where', 'who', 'says', 'said', 'will', 'more', 'over', 'after', 'into', 'out', 'up', 'down']);
+  const SOFT_STOP_WORDS = new Set(['review', 'guide', 'analysis', 'opinion', 'best', 'week', 'month', 'year', 'daily', 'recap', 'impressions']);
+
   const TOKEN_MAP = {
     'stocks': 'stock', 'shares': 'stock', 'market': 'stock',
     'plunge': 'drop', 'plunged': 'drop', 'falls': 'drop', 'falling': 'drop', 'slide': 'drop', 'slump': 'drop',
@@ -588,29 +592,44 @@ function getJaccardSimilarity(str1, str2) {
     'cops': 'police', 'officers': 'police',
     'poll': 'survey',
     'talks': 'meet', 'meeting': 'meet', 'summit': 'meet',
-    'deaths': 'dead', 'killed': 'dead', 'dies': 'dead'
+    'deaths': 'dead', 'killed': 'dead', 'dies': 'dead', 'fatal': 'dead',
+    'cuts': 'cut', 'cutting': 'cut'
   };
 
-  const tokenize = s => {
-    return new Set(
-      s.toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .split(/\s+/)
-        .filter(w => w.length >= 2 && !STOP_WORDS.has(w)) // V118.6: Allow 2-letter words (US, UK, AI)
-        .map(w => TOKEN_MAP[w] || w) // Apply Synonym Map
-    );
+  const normalize = (title) => {
+    // 1. Strip Prefixes (Leading "Breaking:", "Live:")
+    let clean = title.replace(/^(breaking|live|opinion|analysis):\s*/i, '');
+
+    const raw = clean.toLowerCase()
+      .replace(/[^\w\s]/g, ' ') // V118.8: Replace punctuation with SPACE, don't delete (Spider-Man -> spider man)
+      .split(/\s+/) // Split on any whitespace
+      .slice(0, 15); // V118.8: Increased cap to 15 to catch more context
+
+    const tokens = [];
+    for (const w of raw) {
+      if (w.length < 2) continue; // Allow 2-letter words (US, AI)
+      if (HARD_STOP_WORDS.has(w)) continue;
+      tokens.push(TOKEN_MAP[w] || w);
+    }
+
+    // Soft stop words only removed for longer titles (>5 tokens)
+    if (tokens.length > 5) {
+      return new Set(tokens.filter(w => !SOFT_STOP_WORDS.has(w)));
+    }
+
+    return new Set(tokens);
   };
 
-  const a = tokenize(str1);
-  const b = tokenize(str2);
+  const a = normalize(titleA);
+  const b = normalize(titleB);
 
-  if (a.size === 0 || b.size === 0) return 0; 
+  if (a.size === 0 || b.size === 0) return { score: 0, minTokens: 0 };
 
   const intersection = new Set([...a].filter(x => b.has(x)));
   const union = new Set([...a, ...b]);
 
-  // Return score AND token count for dynamic thresholding
-  return { score: union.size === 0 ? 0 : intersection.size / union.size, minTokens: Math.min(a.size, b.size) };
+  const score = union.size === 0 ? 0 : intersection.size / union.size;
+  return { score, minTokens: Math.min(a.size, b.size) };
 }
 
 function groupArticles(items) {
@@ -625,36 +644,42 @@ function groupArticles(items) {
   });
 
   const clusters = [];
-  const BASE_THRESHOLD = 0.31; // V118.6: Lowered from 0.40
-  const SHORT_THRESHOLD = 0.25; // V118.6: For short titles (<= 5 tokens)
-  const TIME_WINDOW = 36 * 60 * 60 * 1000; // 36 Hours
+  const BASE_THRESHOLD = 0.28; // V118.8: Lowered from 0.31
+  const SHORT_THRESHOLD = 0.20; // V118.8: Lowered from 0.25 (Aggressive for shorts)
+  const TIME_WINDOW = 36 * 60 * 60 * 1000;
+
+  // Reset Stats
+  CLUSTER_STATS.compared = 0; CLUSTER_STATS.matched = 0; CLUSTER_STATS.rejectedByThreshold = 0; CLUSTER_STATS.rejectedByTime = 0;
 
   uniqueItems.forEach(newItem => {
     let matchIdx = -1;
-    // Iterate backwards to find recent matches first
     for (let i = clusters.length - 1; i >= 0; i--) {
       const existing = clusters[i];
       const target = existing.type === 'cluster' ? existing.primaryItem : existing;
-      const targetDate = target.date;
 
-      // OPTIMIZATION: If we hit a cluster outside the window, stop searching.
-      if (Math.abs(new Date(newItem.date) - new Date(targetDate)) > TIME_WINDOW) break;
+      CLUSTER_STATS.compared++;
+
+      if (Math.abs(new Date(newItem.date) - new Date(target.date)) > TIME_WINDOW) {
+        CLUSTER_STATS.rejectedByTime++;
+        break;
+      }
 
       const result = getJaccardSimilarity(newItem.title, target.title);
-      
-      // V118.6: Dynamic Threshold
       const effectiveThreshold = result.minTokens <= 5 ? SHORT_THRESHOLD : BASE_THRESHOLD;
+      if (result.minTokens <= 5) CLUSTER_STATS.shortTitleBoosts++;
 
       if (result.score >= effectiveThreshold) {
-        // SOURCE GUARD: Only cluster if sources are different.
-        // If sources are identical, it's a story update. Since we process newest first,
-        // we discard the older version (newItem) to avoid "CBS News + 1 More (CBS News)".
-        if (newItem.source === target.source) {
-          matchIdx = -2; // Signal to discard
-        } else {
-          matchIdx = i;
+        // Source Guard: Same source requires higher match, but lowered to 0.40 (was 0.45)
+        if (newItem.source === target.source && result.score < 0.40) {
+          CLUSTER_STATS.rejectedByThreshold++;
+          continue;
         }
+
+        CLUSTER_STATS.matched++;
+        matchIdx = i;
         break;
+      } else {
+        CLUSTER_STATS.rejectedByThreshold++;
       }
     }
 
@@ -678,6 +703,8 @@ function groupArticles(items) {
       clusters.push(newItem);
     }
   });
+
+  logToFile(`[Clustering Stats] Compared: ${CLUSTER_STATS.compared}, Matches: ${CLUSTER_STATS.matched}, Time Rejects: ${CLUSTER_STATS.rejectedByTime}, Score Rejects: ${CLUSTER_STATS.rejectedByThreshold}, Short Boosts: ${CLUSTER_STATS.shortTitleBoosts}`);
   return clusters;
 }
 
@@ -934,7 +961,7 @@ async function renderReader() {
           </div>
         </article>`
       }
-      
+
       // STANDARD ITEM RENDERING (Fallback)
       const hasRead = READ_HISTORY.includes(item.link);
       const isSaved = BOOKMARKS.some(b => b.link === item.link);
