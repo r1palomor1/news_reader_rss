@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V119.0
-// Status: V119.0 Stable (Entity Seeding + Dynamic % Display)
+// Version: V119.5
+// Status: V119.5 Title Stats (Requested Layout)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -874,6 +874,32 @@ async function renderReader() {
   const returnSource = fm.fileExists(PREV_CAT_FILE) ? fm.readString(PREV_CAT_FILE) : "ALL SOURCES";
   const newCutoff = getNewCutoffMs();
 
+  // V119.5: Simple Layout (Requested)
+  // 1. Title gets the %.
+  // 2. Subtitle gets the count.
+  
+  let headerTitle = CATEGORY === 'BOOKMARKS' ? 'READ LATER' : CATEGORY;
+  let headerSubText = `${filteredPool.length} Items`; // Reset to simple
+  
+  if (CATEGORY === "ALL SOURCES") {
+    let totalArticles = 0;
+    let clusteredArticles = 0;
+    filteredPool.forEach(item => {
+      if (item.type === 'cluster') {
+        const groupSize = 1 + item.relatedItems.length;
+        totalArticles += groupSize;
+        clusteredArticles += groupSize;
+      } else {
+        totalArticles += 1;
+      }
+    });
+
+    if (totalArticles > 0) {
+      const percent = Math.round((clusteredArticles / totalArticles) * 100);
+      headerTitle += ` (${percent}%)`;
+    }
+  }
+
   let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>
   body { font-family: ui-sans-serif; background-color: #0f172a; color: #f1f5f9; -webkit-user-select: none; scroll-behavior: smooth; } 
   .glass { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); background: rgba(15, 23, 42, 0.85); border-bottom: 1px solid #1e293b; } 
@@ -890,25 +916,8 @@ async function renderReader() {
   <header class="fixed top-0 left-0 right-0 z-40 glass">
     <div class="px-5 pt-3 pb-2 flex justify-between items-center">
       <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')">
-        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${CATEGORY === 'BOOKMARKS' ? 'READ LATER' : CATEGORY} ▼</h1>
-        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">
-          ${(() => {
-      const groups = filteredPool.filter(i => i.type === 'cluster').length;
-      const singles = filteredPool.filter(i => i.type !== 'cluster').length;
-      const displayedItems = groups + singles; // How many "cards" are shown
-
-      // Reconstruct TOTAL ARTICLES from the pool
-      // Singles count as 1. Clusters count as 1 + relatedItems.length
-      let totalArticles = singles;
-      filteredPool.filter(i => i.type === 'cluster').forEach(c => totalArticles += (1 + c.relatedItems.length));
-
-      // Clustering Rate: "How many articles were absorbed?" 
-      // Formula requested: 100% - (displayedItems / totalArticles * 100)
-      const rate = totalArticles > 0 ? (100 - ((displayedItems / totalArticles) * 100)).toFixed(1) : 0;
-
-      return `${displayedItems} Items (${rate}% Clustered) • V119.0`;
-    })()}
-        </span>
+        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${headerTitle} ▼</h1>
+        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${headerSubText}</span>
       </div>
       <div class="flex gap-4 items-center">
         <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
