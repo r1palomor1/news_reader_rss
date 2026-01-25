@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V118.0
+// NEWS READER (RSS/ATOM) — V118.2
 // Protocol: v96.2 Engine 
-// Status: Master File Architecture (Optimized Loading)
+// Status: Master File + Pre-Baked Clusters + Natural Sort
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -167,12 +167,19 @@ async function generateMasterFeed() {
   // Sort by Date (Newest First)
   unique.sort((a, b) => new Date(b.date) - new Date(a.date))
 
-  // CAP SIZE: Keep top 1000 to prevent memory crashes
+  // CAP SIZE: Keep top 1000 items to prevent memory crashes
   const capped = unique.slice(0, 1000)
 
-  // Write Master File
-  fm.writeString(MASTER_FEED_FILE, JSON.stringify(capped))
-  logToFile(`[Master] Generated Master Feed with ${capped.length} items (Pool: ${unique.length})`)
+  // V118.1: CLUSTER IMMEDIATELY (Bake into Master File)
+  logToFile(`[Master] Clustering ${capped.length} items...`)
+  const clustered = groupArticles(capped)
+
+  // V118.5: Natural Sort (Date Based) - Removed Force Clusters to Top
+  clustered.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Write Master File (Now contains CLUSTERS, not just raw items)
+  fm.writeString(MASTER_FEED_FILE, JSON.stringify(clustered))
+  logToFile(`[Master] Generated Master Feed with ${clustered.length} Entities (from ${unique.length} Articles)`)
 }
 
 // --- CORE UTILITIES ---
@@ -764,18 +771,20 @@ async function renderReader() {
   const heatThreshold = (CATEGORY === "ALL SOURCES") ? 8 : 4;
   let rawPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
 
-  // V117: Apply Clustering
-  logToFile(`[Render] Starting Clustering. Input: ${rawPool.length} items.`);
-  let filteredPool = groupArticles(rawPool);
-  logToFile(`[Render] Clustering Done. Output: ${filteredPool.length} items. (Diff: ${rawPool.length - filteredPool.length})`);
+  let filteredPool = []
 
-  // V117.4: Force Clusters to Top of Feed for Verification
-  logToFile(`[Render] Sorting: Promoting ${filteredPool.filter(i => i.type === 'cluster').length} clusters to top.`);
-  filteredPool.sort((a, b) => {
-    if (a.type === 'cluster' && b.type !== 'cluster') return -1;
-    if (a.type !== 'cluster' && b.type === 'cluster') return 1;
-    return new Date(b.date) - new Date(a.date);
-  });
+  // V118.1: If ALL SOURCES, items are ALREADY clustered in the file.
+  if (CATEGORY === "ALL SOURCES") {
+    filteredPool = rawPool; // Data is already {type: 'cluster', ...}
+    logToFile(`[Render] Using Pre-Clustered Master File: ${filteredPool.length} entities.`);
+  } else {
+    // Single Source: We still need to cluster on the fly (lightweight)
+    logToFile(`[Render] Clustering Single Source on fly...`);
+    filteredPool = groupArticles(rawPool);
+
+    // Natural Sort
+    filteredPool.sort((a, b) => new Date(b.date) - new Date(a.date));
+  }
 
   const totalCount = filteredPool.length;
   const startIdx = (PAGE - 1) * ITEMS_PER_PAGE;
