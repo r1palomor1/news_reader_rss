@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V119.5
-// Status: V119.5 Title Stats (Requested Layout)
+// Version: V119.6
+// Status: V119.6 Move Cluster Stats to Subtitle
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -880,6 +880,7 @@ async function renderReader() {
   
   let headerTitle = CATEGORY === 'BOOKMARKS' ? 'READ LATER' : CATEGORY;
   let headerSubText = `${filteredPool.length} Items`; // Reset to simple
+  let clusterHtml = '';
   
   if (CATEGORY === "ALL SOURCES") {
     let totalArticles = 0;
@@ -896,7 +897,7 @@ async function renderReader() {
 
     if (totalArticles > 0) {
       const percent = Math.round((clusteredArticles / totalArticles) * 100);
-      headerTitle += ` (${percent}%)`;
+      clusterHtml = `<span class="text-[10px] text-slate-500 font-bold ml-1 opacity-75">(${percent}% Clustered)</span>`;
     }
   }
 
@@ -1132,7 +1133,7 @@ async function renderReader() {
   </div>
 <script>
   let xDown = null, yDown = null;
-  const START_IDX = ${startIdx}; const BASE_TOTAL = ${totalCount};
+  const START_IDX = ${startIdx}; const BASE_TOTAL = ${totalCount}; const CLUSTER_HTML = \`${clusterHtml}\`;
   
   function toggleMenu(e) { e.stopPropagation(); const m = document.getElementById('actionMenu'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; }
   window.addEventListener('click', () => { document.getElementById('actionMenu').style.display = 'none'; });
@@ -1162,7 +1163,7 @@ async function renderReader() {
     const cards = document.querySelectorAll('.news-card');
     const pagControls = document.getElementById('paginationControls');
     const headerSub = document.getElementById('headerSub');
-    if (!query) { cards.forEach(card => { const idx = parseInt(card.dataset.index); card.classList.toggle('hidden-card', !(idx >= START_IDX && idx < START_IDX + 25)); card.classList.remove('highlight-card'); }); pagControls.style.display = 'flex'; headerSub.innerText = BASE_TOTAL + " Items"; return; }
+    if (!query) { cards.forEach(card => { const idx = parseInt(card.dataset.index); card.classList.toggle('hidden-card', !(idx >= START_IDX && idx < START_IDX + 25)); card.classList.remove('highlight-card'); }); pagControls.style.display = 'flex'; headerSub.innerHTML = BASE_TOTAL + " Items " + CLUSTER_HTML; return; }
     pagControls.style.display = 'none'; const terms = query.split(/\\s+/); const includes = terms.filter(t => !t.startsWith('-')); const excludes = terms.filter(t => t.startsWith('-')).map(t => t.substring(1));
     let visibleCount = 0;
     cards.forEach(card => {
