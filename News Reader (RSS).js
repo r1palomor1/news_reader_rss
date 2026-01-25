@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V118.2
+// NEWS READER (RSS/ATOM) — V118.5
 // Protocol: v96.2 Engine 
-// Status: Master File + Pre-Baked Clusters + Natural Sort
+// Status: Cluster UI Colors (Indigo Coverage Link)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -868,30 +868,18 @@ async function renderReader() {
         const sourceLabel = uniqueSources.length > 1 ? `${uniqueSources.length} SOURCES` : p.source;
 
         return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-indigo-500/80 shadow-lg transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${p.title.toLowerCase()}" data-link="${p.link}" data-title="${p.title}" data-source="${p.source}" data-date="${p.date}" data-desc="${p.desc || ''}" data-index="${idx}" data-related-links="${encodeURIComponent(JSON.stringify(item.relatedItems.map(r => r.link)))}" data-related-items="${encodeURIComponent(JSON.stringify(item.relatedItems))}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
-          <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check" onchange="updateBulkBar()"></div>
+          <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
           <div class="px-4 pt-4 pb-2">
             <div class="flex justify-between items-baseline mb-1.5">
               <div class="flex items-center gap-2">
-                 <span class="text-[12px] font-bold uppercase text-blue-400">${sourceLabel}</span>
-                 <span class="text-[9px] bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded font-black tracking-tighter">+${count} MORE</span>
+                 <span class="text-[12px] font-bold uppercase text-blue-400">${p.source}</span>
                  ${isNew ? '<span class="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-black tracking-tighter">NEW</span>' : ''}
               </div>
               <span class="text-[12px] font-medium text-slate-400 uppercase mr-10">${formatDateTime(p.date)}</span>
             </div>
             <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10">${p.title}</h2>
             
-            <!-- Accordion Details (Hidden by default) -->
-            <details class="group mt-2">
-                <summary class="list-none cursor-pointer text-[11px] text-blue-400 font-bold uppercase tracking-wide flex items-center gap-1">
-                   <span>View Coverage</span>
-                   <span class="material-icons-round text-sm transition-transform group-open:rotate-180">expand_more</span>
-                </summary>
-                <div class="mt-2 space-y-2 border-t border-slate-800/50 pt-2">
-                   ${item.relatedItems.map(r => `<div class="flex justify-between items-center"><span class="text-[12px] text-slate-400 truncate w-2/3">${r.source}: ${r.title}</span><a href="${scriptUrl}?externalLink=${encodeURIComponent(r.link)}" class="text-[11px] text-blue-500">Read</a></div>`).join('')}
-                </div>
-            </details>
-
-            <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
+            <div class="flex items-center justify-between pb-3 mt-3 border-b border-slate-700/50">
               <div class="flex gap-6">
                 <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
                 <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[10px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'} whitespace-nowrap">Read Later</span></div>
@@ -899,10 +887,31 @@ async function renderReader() {
               </div>
               <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(p.link)}&search=${encodeURIComponent(SEARCH_TERM)}" class="material-icons-round text-xl">link</a></div>
             </div>
+            
+            <!-- Accordion Details (Moved to Bottom) -->
+            <details class="group mt-2">
+                <summary class="list-none cursor-pointer text-[11px] text-indigo-400 font-bold uppercase tracking-wide flex items-center gap-1">
+                   <span>View Coverage (+${count} Articles)</span>
+                   <span class="material-icons-round text-sm transition-transform group-open:rotate-180">expand_more</span>
+                </summary>
+                <div class="mt-2 space-y-3 pt-1">
+                   ${item.relatedItems.map(r => `
+                     <div class="flex justify-between items-center gap-3">
+                       <input type="checkbox" class="bulk-check child-check shrink-0 w-4 h-4 border-slate-600 rounded" data-link="${r.link}" data-title="${r.title}" data-source="${r.source}" data-date="${r.date}" onchange="updateBulkBar()">
+                       <div class="flex-1 min-w-0">
+                         <div class="flex items-baseline justify-between">
+                           <span class="text-[11px] font-bold text-slate-300 truncate">${r.source}</span>
+                           <span class="text-[10px] text-slate-500 whitespace-nowrap ml-2">${formatDateTime(r.date).split('•')[1] || ''}</span>
+                         </div>
+                         <div class="text-[12px] text-slate-400 truncate leading-snug cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(r.link)}'">${r.title}</div>
+                       </div>
+                     </div>`).join('')}
+                </div>
+            </details>
           </div>
         </article>`
       }
-
+      
       // STANDARD ITEM RENDERING (Fallback)
       const hasRead = READ_HISTORY.includes(item.link);
       const isSaved = BOOKMARKS.some(b => b.link === item.link);
@@ -911,7 +920,7 @@ async function renderReader() {
       const showSave = CATEGORY !== 'FAVORITES';
 
       return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${item.title.toLowerCase()}" data-link="${item.link}" data-title="${item.title}" data-source="${item.source}" data-date="${item.date}" data-desc="${item.desc || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
-      <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check" onchange="updateBulkBar()"></div>
+      <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
       <div class="px-4 pt-4 pb-2">
         <div class="flex justify-between items-baseline mb-1.5">
           <div class="flex items-center gap-2"><span class="text-[12px] font-bold uppercase text-blue-500">${item.source}</span>${isNew ? '<span class="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-black tracking-tighter">NEW</span>' : ''}</div>
@@ -1095,14 +1104,25 @@ async function renderReader() {
     let playUrls = [];
     let readUrls = [];
     const checked = document.querySelectorAll('.bulk-check:checked');
-    const pool = checked.length > 0 ? Array.from(checked).map(cb => cb.closest('.news-card')) : Array.from(document.querySelectorAll('.news-card:not(.hidden-card)'));
+    const pool = checked.length > 0 ? Array.from(checked) : Array.from(document.querySelectorAll('.news-card:not(.hidden-card) .bulk-check.parent-check'));
     
-    pool.forEach(card => {
-      const link = card.dataset.link;
+    pool.forEach(cb => {
+      // V118.3: Handle Child Checkboxes (Use specific data) or Parent (Use Card data)
+      const isChild = cb.classList.contains('child-check');
+      const card = cb.closest('.news-card');
+      
+      const link = isChild ? cb.dataset.link : card.dataset.link;
+      
       playUrls.push(link);
       readUrls.push(link);
+      
+      // LOGIC: If Acting on Child OR Parent, NUKE THE CLUSTER (Mark all related read)
+      // This ensures we don't leave stale duplicates behind.
       const related = card.dataset.relatedLinks;
       if (related) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
+      
+      // Also ensure Parent is marked if we clicked a child
+      if (isChild) readUrls.push(card.dataset.link);
     });
     
     if (playUrls.length === 0) return;
@@ -1115,10 +1135,16 @@ async function renderReader() {
     const checked = Array.from(document.querySelectorAll('.bulk-check:checked'));
     let links = [];
     checked.forEach(cb => {
+      const isChild = cb.classList.contains('child-check');
       const card = cb.closest('.news-card');
-      links.push(card.dataset.link);
+      const link = isChild ? cb.dataset.link : card.dataset.link;
+      
+      links.push(link);
+      
+      // Cluster Nuke Logic
       const related = card.dataset.relatedLinks;
       if (related) try { links = links.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
+      if (isChild) links.push(card.dataset.link);
     });
     const search = encodeURIComponent(document.getElementById('searchInput').value); 
     window.location.href = '${scriptUrl}?bulkRead=' + encodeURIComponent(JSON.stringify(links)) + '&search=' + search + '&page=${PAGE}'; 
@@ -1129,12 +1155,17 @@ async function renderReader() {
     let bookmarkItems = [];
     let readUrls = [];
     checked.forEach(cb => {
+      const isChild = cb.classList.contains('child-check');
       const card = cb.closest('.news-card');
-      const d = card.dataset;
-      // OPTIMIZATION: Omit 'desc' from bulk URL to prevent truncation and URIError
+      const d = isChild ? cb.dataset : card.dataset;
+      
+      // Save specific item
       bookmarkItems.push({ title: d.title, link: d.link, source: d.source, date: d.date, desc: '' });
+      
+      // Cluster Nuke: Mark REST as read
       const related = card.dataset.relatedLinks;
       if (related) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
+      if (isChild) readUrls.push(card.dataset.link);
     });
     window.location.href = '${scriptUrl}?bulkBookmark=' + encodeURIComponent(JSON.stringify(bookmarkItems)) + '&readLinks=' + encodeURIComponent(JSON.stringify(readUrls)) + '&page=${PAGE}'; 
   }
