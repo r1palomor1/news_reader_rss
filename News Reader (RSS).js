@@ -2,9 +2,9 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V118.5
+// NEWS READER (RSS/ATOM) — V118.6
 // Protocol: v96.2 Engine 
-// Status: Cluster UI Colors (Indigo Coverage Link)
+// Status: Clustering Tuned (Synonyms + Dynamic Thresholds)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -573,26 +573,44 @@ if (args.queryParameters.reopenTagEditor) {
 
 // --- CLUSTERING LOGIC (V117 - Tuned) ---
 
-function getJaccardSimilarity(str1, str2) {
-  // Common news noise words to ignore - prevents clustering "Breaking News: Cat" with "Breaking News: Dog"
-  const STOP_WORDS = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'from', 'news', 'live', 'update', 'breaking', 'video', 'watch', 'photos', 'exclusive', 'report', 'analysis', 'today', 'week', 'year', 'month', 'daily', 'review', 'guide', 'best', 'what', 'when', 'where']);
+// --- CLUSTERING LOGIC (V118.6 - Enhanced) ---
 
-  const tokenize = s => new Set(
-    s.toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !STOP_WORDS.has(w))
-  );
+function getJaccardSimilarity(str1, str2) {
+  // V118.6: Refined Stop Words (Removed 'review', 'guide', 'best' to preserve context)
+  const STOP_WORDS = new Set(['the', 'and', 'for', 'with', 'this', 'that', 'from', 'news', 'live', 'update', 'breaking', 'video', 'watch', 'photos', 'exclusive', 'report', 'analysis', 'today', 'week', 'year', 'month', 'daily', 'what', 'when', 'where', 'who']);
+
+  // V118.6: Synonym Map (Collapse common news terms)
+  const TOKEN_MAP = {
+    'stocks': 'stock', 'shares': 'stock', 'market': 'stock',
+    'plunge': 'drop', 'plunged': 'drop', 'falls': 'drop', 'falling': 'drop', 'slide': 'drop', 'slump': 'drop',
+    'rise': 'gains', 'rising': 'gains', 'jump': 'gains', 'soar': 'gains', 'surges': 'gains',
+    'bill': 'law', 'legislation': 'law', 'act': 'law',
+    'cops': 'police', 'officers': 'police',
+    'poll': 'survey',
+    'talks': 'meet', 'meeting': 'meet', 'summit': 'meet',
+    'deaths': 'dead', 'killed': 'dead', 'dies': 'dead'
+  };
+
+  const tokenize = s => {
+    return new Set(
+      s.toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .split(/\s+/)
+        .filter(w => w.length >= 2 && !STOP_WORDS.has(w)) // V118.6: Allow 2-letter words (US, UK, AI)
+        .map(w => TOKEN_MAP[w] || w) // Apply Synonym Map
+    );
+  };
 
   const a = tokenize(str1);
   const b = tokenize(str2);
 
-  if (a.size === 0 || b.size === 0) return 0; // Prevent div by zero if title is all stop words
+  if (a.size === 0 || b.size === 0) return 0; 
 
   const intersection = new Set([...a].filter(x => b.has(x)));
   const union = new Set([...a, ...b]);
 
-  return union.size === 0 ? 0 : intersection.size / union.size;
+  // Return score AND token count for dynamic thresholding
+  return { score: union.size === 0 ? 0 : intersection.size / union.size, minTokens: Math.min(a.size, b.size) };
 }
 
 function groupArticles(items) {
@@ -607,7 +625,8 @@ function groupArticles(items) {
   });
 
   const clusters = [];
-  const SIMILARITY_THRESHOLD = 0.40;
+  const BASE_THRESHOLD = 0.31; // V118.6: Lowered from 0.40
+  const SHORT_THRESHOLD = 0.25; // V118.6: For short titles (<= 5 tokens)
   const TIME_WINDOW = 36 * 60 * 60 * 1000; // 36 Hours
 
   uniqueItems.forEach(newItem => {
@@ -621,8 +640,12 @@ function groupArticles(items) {
       // OPTIMIZATION: If we hit a cluster outside the window, stop searching.
       if (Math.abs(new Date(newItem.date) - new Date(targetDate)) > TIME_WINDOW) break;
 
-      const score = getJaccardSimilarity(newItem.title, target.title);
-      if (score >= SIMILARITY_THRESHOLD) {
+      const result = getJaccardSimilarity(newItem.title, target.title);
+      
+      // V118.6: Dynamic Threshold
+      const effectiveThreshold = result.minTokens <= 5 ? SHORT_THRESHOLD : BASE_THRESHOLD;
+
+      if (result.score >= effectiveThreshold) {
         // SOURCE GUARD: Only cluster if sources are different.
         // If sources are identical, it's a story update. Since we process newest first,
         // we discard the older version (newItem) to avoid "CBS News + 1 More (CBS News)".
