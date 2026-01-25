@@ -2,9 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// NEWS READER (RSS/ATOM) — V118.8
-// Protocol: v96.2 Engine 
-// Status: V118.8 Stable (High Density Clustering)
+// Version: V119.0
+// Status: V119.0 Stable (Entity Seeding + Dynamic % Display)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -578,7 +577,7 @@ if (args.queryParameters.reopenTagEditor) {
 
 // --- CLUSTERING LOGIC (V118.6 - Enhanced) ---
 
-// --- CLUSTERING LOGIC (V118.8 - High Density) ---
+// --- CLUSTERING LOGIC (V119.0 - Entity Seeding) ---
 
 function getJaccardSimilarity(titleA, titleB) {
   const HARD_STOP_WORDS = new Set(['breaking', 'live', 'update', 'video', 'watch', 'photos', 'the', 'and', 'for', 'with', 'this', 'that', 'from', 'news', 'exclusive', 'report', 'today', 'what', 'when', 'where', 'who', 'says', 'said', 'will', 'more', 'over', 'after', 'into', 'out', 'up', 'down']);
@@ -600,6 +599,25 @@ function getJaccardSimilarity(titleA, titleB) {
     // 1. Strip Prefixes (Leading "Breaking:", "Live:")
     let clean = title.replace(/^(breaking|live|opinion|analysis):\s*/i, '');
 
+    // V119.0: Entity Extraction (Capitalized words)
+    // We do this BEFORE lowercasing. 
+    // We look for words that start with Uppercase, but are NOT the first word of the title (to avoid false positives from sentence case),
+    // UNLESS the title is fully capitalized.
+
+    // Remove non-alphanumeric chars for entity extraction to avoid "Biden," "Apple's"
+    const rawEntities = clean.replace(/[^\w\s]/g, ' ').split(/\s+/);
+    const entities = new Set();
+
+    rawEntities.forEach((w, index) => {
+      if (w.length < 2) return;
+      // Simple logic: if it's capitalized
+      if (w[0] === w[0].toUpperCase() && w[0] !== w[0].toLowerCase()) {
+        const lowerW = w.toLowerCase();
+        if (HARD_STOP_WORDS.has(lowerW)) return; // Skip "The", "A", "In" even if capitalized
+        entities.add(lowerW); // Store as lowercase for easier comparison
+      }
+    });
+
     const raw = clean.toLowerCase()
       .replace(/[^\w\s]/g, ' ') // V118.8: Replace punctuation with SPACE, don't delete (Spider-Man -> spider man)
       .split(/\s+/) // Split on any whitespace
@@ -613,23 +631,38 @@ function getJaccardSimilarity(titleA, titleB) {
     }
 
     // Soft stop words only removed for longer titles (>5 tokens)
+    let finalTokens;
     if (tokens.length > 5) {
-      return new Set(tokens.filter(w => !SOFT_STOP_WORDS.has(w)));
+      finalTokens = new Set(tokens.filter(w => !SOFT_STOP_WORDS.has(w)));
+    } else {
+      finalTokens = new Set(tokens);
     }
 
-    return new Set(tokens);
+    return { tokens: finalTokens, entities: entities };
   };
 
   const a = normalize(titleA);
   const b = normalize(titleB);
 
-  if (a.size === 0 || b.size === 0) return { score: 0, minTokens: 0 };
+  // Base Jaccard on TOKENS
+  if (a.tokens.size === 0 || b.tokens.size === 0) return { score: 0, minTokens: 0 };
 
-  const intersection = new Set([...a].filter(x => b.has(x)));
-  const union = new Set([...a, ...b]);
+  const tokenIntersection = new Set([...a.tokens].filter(x => b.tokens.has(x)));
+  const tokenUnion = new Set([...a.tokens, ...b.tokens]);
+  let baseScore = tokenUnion.size === 0 ? 0 : tokenIntersection.size / tokenUnion.size;
 
-  const score = union.size === 0 ? 0 : intersection.size / union.size;
-  return { score, minTokens: Math.min(a.size, b.size) };
+  // V119.0: Entity Bonus
+  // If we have at least one shared ENTITY, and the base score implies *some* relevance (> 0.1), give a boost.
+  const entityIntersection = new Set([...a.entities].filter(x => b.entities.has(x)));
+
+  if (entityIntersection.size > 0 && baseScore > 0.1) {
+    // Bonus: +0.12 (The "Context Lever")
+    baseScore += 0.12;
+    // Cap at 1.0
+    if (baseScore > 1.0) baseScore = 1.0;
+  }
+
+  return { score: baseScore, minTokens: Math.min(a.tokens.size, b.tokens.size) };
 }
 
 function groupArticles(items) {
@@ -858,7 +891,24 @@ async function renderReader() {
     <div class="px-5 pt-3 pb-2 flex justify-between items-center">
       <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')">
         <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${CATEGORY === 'BOOKMARKS' ? 'READ LATER' : CATEGORY} ▼</h1>
-        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${totalCount} Items (${filteredPool.filter(i => i.type === 'cluster').length} Groups) • V117.5.7</span>
+        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">
+          ${(() => {
+      const groups = filteredPool.filter(i => i.type === 'cluster').length;
+      const singles = filteredPool.filter(i => i.type !== 'cluster').length;
+      const displayedItems = groups + singles; // How many "cards" are shown
+
+      // Reconstruct TOTAL ARTICLES from the pool
+      // Singles count as 1. Clusters count as 1 + relatedItems.length
+      let totalArticles = singles;
+      filteredPool.filter(i => i.type === 'cluster').forEach(c => totalArticles += (1 + c.relatedItems.length));
+
+      // Clustering Rate: "How many articles were absorbed?" 
+      // Formula requested: 100% - (displayedItems / totalArticles * 100)
+      const rate = totalArticles > 0 ? (100 - ((displayedItems / totalArticles) * 100)).toFixed(1) : 0;
+
+      return `${displayedItems} Items (${rate}% Clustered) • V119.0`;
+    })()}
+        </span>
       </div>
       <div class="flex gap-4 items-center">
         <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
@@ -874,12 +924,12 @@ async function renderReader() {
     </div>
     <div class="flex overflow-x-auto px-4 pb-3 gap-2 no-scrollbar" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
       ${pulseTagsList.map(([tag, count]) => {
-    const isHot = count >= heatThreshold;
-    return `<div onclick="setPulseSearch('${tag}')" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap">
+      const isHot = count >= heatThreshold;
+      return `<div onclick="setPulseSearch('${tag}')" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap">
           <span class="text-[11px] font-bold text-blue-400">${isHot ? '🔥 ' : ''}${tag}</span>
           <span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span>
         </div>`
-  }).join('')}
+    }).join('')}
     </div>
   </header>
 
