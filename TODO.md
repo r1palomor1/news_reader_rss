@@ -42,6 +42,16 @@
 
 ---
 
+## 🚀 CRITICAL / IMMEDIATE
+
+### 🔴 Re-evaluate Loading Sources Flow (State-Change Optimization)
+**Status:** High Priority
+**Task:** Re-examine the current source loading/syncing method. The aim is to restore a previous "good method" that was a significant time-saver when changing states (choosing sources, tag editor, adding feeds, refreshing all). 
+**UI Goal:** Ensure that navigating between screens doesn't trigger redundant or blocking syncs, maintaining a fast, fluid experience.
+**Internal Check:** Review Git history for the multi-stage or background sync logic that handled state transitions smoothly without full-page reloads.
+
+---
+
 ## Future Enhancements / Backlog
 
 ### Exact Pulse Tag Filtering
