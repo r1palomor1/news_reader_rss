@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V130.0
-// Status: Fix Alert Bug - Proper Delete Confirmation
+// Version: V131.0
+// Status: Add Error Logging & User Notifications
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -28,7 +28,12 @@ if (!fm.fileExists(CACHE_DIR)) fm.createDirectory(CACHE_DIR)
 async function getJsonFile(path) {
   if (!fm.fileExists(path)) return []
   if (fm.isFileStoredIniCloud(path)) await fm.downloadFileFromiCloud(path)
-  try { return JSON.parse(fm.readString(path)) } catch (e) { return [] }
+  try { 
+    return JSON.parse(fm.readString(path)) 
+  } catch (error) { 
+    logToFile(`[JSON Parse Error] ${path}: ${error.message}`)
+    return [] 
+  }
 }
 
 function getTags(path) {
@@ -218,11 +223,14 @@ async function fetchSingleFeed(url, name) {
     const filtered = items.filter(i => (Date.now() - new Date(i.date).getTime()) < expiry)
     fm.writeString(path, JSON.stringify(filtered));
     return filtered
-  } catch {
+  } catch (error) {
+    logToFile(`[Fetch Error] ${name}: ${error.message}`)
     if (fm.fileExists(path)) {
+      logToFile(`[Fetch] Using cached data for ${name}`)
       const cached = JSON.parse(fm.readString(path))
       return cached.filter(i => (Date.now() - new Date(i.date).getTime()) < expiry)
     }
+    logToFile(`[Fetch] No cache available for ${name}`)
     return []
   }
 }
