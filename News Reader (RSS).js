@@ -2,7 +2,7 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V137.0
+// Version: V138.0
 // Status: Input Sanitization - Preventive Validation
 // =======================================
 
@@ -651,7 +651,6 @@ if (args.queryParameters.reopenTagEditor) {
   APP_STATE = 'READER'
   // Set a flag to auto-open Tag Editor after reader renders
   if (args.queryParameters.page) { PAGE = parseInt(args.queryParameters.page) }
-  const autoOpenTagEditor = true
 }
 
 // --- CLUSTERING LOGIC (V117 - Tuned) ---
