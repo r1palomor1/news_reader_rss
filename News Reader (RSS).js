@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V133.0
-// Status: Add XSS Protection (HTML Escaping)
+// Version: V134.0
+// Status: Memory Leak Fix - READ_HISTORY Rotation
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -22,6 +22,9 @@ const MASTER_FEED_FILE = fm.joinPath(dir, "master_feed.json")
 // New Tag Editor Files
 const EXCLUSION_FILE = fm.joinPath(dir, "tag_exclusions.txt")
 const INCLUSION_FILE = fm.joinPath(dir, "tag_inclusions.txt")
+
+// Configuration Constants
+const MAX_HISTORY = 250  // Maximum read history items to retain
 
 if (!fm.fileExists(CACHE_DIR)) fm.createDirectory(CACHE_DIR)
 
@@ -48,7 +51,10 @@ function saveTags(path, tags) {
   fm.writeString(path, tags.join("\n"))
 }
 
-function saveHistory(arr) { fm.writeString(HISTORY_FILE, JSON.stringify(arr)) }
+function saveHistory(arr) { 
+  const trimmed = arr.slice(-MAX_HISTORY)  // Keep only most recent items
+  fm.writeString(HISTORY_FILE, JSON.stringify(trimmed)) 
+}
 function saveBookmarks(arr) { fm.writeString(BOOKMARK_FILE, JSON.stringify(arr)) }
 function saveFavorites(arr) { fm.writeString(FAV_FILE, JSON.stringify(arr)) }
 
