@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V134.0
-// Status: Memory Leak Fix - READ_HISTORY Rotation
+// Version: V135.0
+// Status: Memory Leak Fix - Debug Log Rotation
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -25,6 +25,7 @@ const INCLUSION_FILE = fm.joinPath(dir, "tag_inclusions.txt")
 
 // Configuration Constants
 const MAX_HISTORY = 250  // Maximum read history items to retain
+const MAX_LOG_SIZE = 10000  // Maximum debug log size in characters
 
 if (!fm.fileExists(CACHE_DIR)) fm.createDirectory(CACHE_DIR)
 
@@ -98,12 +99,27 @@ let SEARCH_TERM = args.queryParameters.search || ""
 const DEBUG_FILE = fm.joinPath(dir, "debug_log.txt")
 function logToFile(msg) {
   try {
-    const prev = fm.fileExists(DEBUG_FILE) ? fm.readString(DEBUG_FILE) : "";
-    // Keep last 4000 chars to avoid memory issues
-    let newContent = prev + "\n[" + new Date().toLocaleTimeString() + "] " + msg;
-    if (newContent.length > 4000) newContent = newContent.substring(newContent.length - 4000);
-    fm.writeString(DEBUG_FILE, newContent);
-  } catch (e) { }
+    const timestamp = new Date().toLocaleTimeString();
+    const entry = `[${timestamp}] ${msg}\n`;
+    
+    let content = fm.fileExists(DEBUG_FILE) ? fm.readString(DEBUG_FILE) : "";
+    content += entry;
+    
+    // Rotate if exceeds max size
+    if (content.length > MAX_LOG_SIZE) {
+      // Keep last MAX_LOG_SIZE characters
+      content = content.substring(content.length - MAX_LOG_SIZE);
+      // Trim to start of first complete line
+      const firstNewline = content.indexOf('\n');
+      if (firstNewline > 0) {
+        content = content.substring(firstNewline + 1);
+      }
+    }
+    
+    fm.writeString(DEBUG_FILE, content);
+  } catch (e) { 
+    // Silent fail - logging shouldn't crash the app
+  }
 }
 
 let PAGE = parseInt(args.queryParameters.page) || 1
