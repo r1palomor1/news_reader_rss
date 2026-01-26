@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V119.6
-// Status: V119.6 Move Cluster Stats to Subtitle
+// Version: V120.1.1
+// Status: V120.1 Footer Select All (Blue UI) & White Cluster Stats
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -372,7 +372,7 @@ if (args.queryParameters.deleteTag) {
 if (args.queryParameters.playall) {
   try {
     const urls = args.queryParameters.urls;
-    const readLinks = args.queryParameters.readLinks ? JSON.parse(decodeURIComponent(args.queryParameters.readLinks)) : urls.split(',');
+    const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : urls.split(',');
 
     readLinks.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) });
     saveHistory(READ_HISTORY);
@@ -400,7 +400,7 @@ if (args.queryParameters.refresh) {
 if (args.queryParameters.bulkBookmark) {
   try {
     const data = JSON.parse(decodeURIComponent(args.queryParameters.bulkBookmark))
-    const readLinks = args.queryParameters.readLinks ? JSON.parse(decodeURIComponent(args.queryParameters.readLinks)) : []
+    const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : []
     data.forEach(item => { if (!BOOKMARKS.some(b => b.link === item.link)) BOOKMARKS.push(item) })
     saveBookmarks(BOOKMARKS);
     readLinks.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) });
@@ -446,7 +446,7 @@ if (args.queryParameters.listen) {
   }
 
   // Handling History - Add if not already read
-  const readLinks = args.queryParameters.readLinks ? JSON.parse(decodeURIComponent(args.queryParameters.readLinks)) : [url];
+  const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : [url];
   readLinks.forEach(link => {
     const isFav = FAVORITES.some(f => f.link === link);
     if (!isFav && !READ_HISTORY.includes(link)) {
@@ -472,13 +472,13 @@ if (args.queryParameters.uncheck) {
 
 if (args.queryParameters.externalLink) {
   const url = args.queryParameters.externalLink
-  Safari.openInApp(url); return
+  await Safari.openInApp(url, false)
 }
 
 if (args.queryParameters.bookmark) {
   const bLink = args.queryParameters.bookmark
   const idx = BOOKMARKS.findIndex(b => b.link === bLink)
-  const readLinks = args.queryParameters.readLinks ? JSON.parse(decodeURIComponent(args.queryParameters.readLinks)) : []
+  const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : []
   if (idx > -1) {
     BOOKMARKS.splice(idx, 1)
     if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
@@ -504,9 +504,18 @@ if (args.queryParameters.favorite) {
   saveFavorites(FAVORITES); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
-if (args.queryParameters.externalLink) {
-  const url = args.queryParameters.externalLink
-  Safari.open(url); return
+if (args.queryParameters.bulkFavorite) {
+  const items = JSON.parse(decodeURIComponent(args.queryParameters.bulkFavorite));
+  let changed = false;
+  items.forEach(item => {
+     const idx = FAVORITES.findIndex(f => f.link === item.link);
+     if (idx === -1) {
+        FAVORITES.push(item);
+        changed = true;
+     }
+  });
+  if (changed) saveFavorites(FAVORITES);
+  Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
 
 if (args.queryParameters.idx) {
@@ -897,9 +906,9 @@ async function renderReader() {
 
     if (totalArticles > 0) {
       const percent = Math.round((clusteredArticles / totalArticles) * 100);
-      clusterHtml = `<span class="text-[10px] text-slate-500 font-bold ml-1 opacity-75">(${percent}% Clustered)</span>`;
+        clusterHtml = `<span class="text-[10px] text-slate-200 font-bold ml-1 opacity-90">(${percent}% Clustered)</span>`;
+      }
     }
-  }
 
   let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>
   body { font-family: ui-sans-serif; background-color: #0f172a; color: #f1f5f9; -webkit-user-select: none; scroll-behavior: smooth; } 
@@ -987,7 +996,7 @@ async function renderReader() {
               </div>
               <span class="text-[12px] font-medium text-slate-400 uppercase mr-10">${formatDateTime(p.date)}</span>
             </div>
-            <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10">${p.title}</h2>
+            <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10 cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(p.link)}${searchParam}&page=${PAGE}'">${p.title}</h2>
             
             <div class="flex items-center justify-between pb-3 mt-3 border-b border-slate-700/50">
               <div class="flex gap-6">
@@ -995,7 +1004,7 @@ async function renderReader() {
                 <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[10px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'} whitespace-nowrap">Read Later</span></div>
                 <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
               </div>
-              <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(p.link)}&search=${encodeURIComponent(SEARCH_TERM)}" class="material-icons-round text-xl">link</a></div>
+              <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(p.link)}${searchParam}&page=${PAGE}" class="material-icons-round text-xl">link</a></div>
             </div>
             
             <!-- Accordion Details (Moved to Bottom) -->
@@ -1013,7 +1022,7 @@ async function renderReader() {
                            <span class="text-[11px] font-bold text-slate-300 truncate">${r.source}</span>
                            <span class="text-[10px] text-slate-500 whitespace-nowrap ml-2">${formatDateTime(r.date).split('•')[1] || ''}</span>
                          </div>
-                         <div class="text-[12px] text-slate-400 truncate leading-snug cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(r.link)}'">${r.title}</div>
+                         <div class="text-[12px] text-slate-400 truncate leading-snug cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(r.link)}${searchParam}&page=${PAGE}'">${r.title}</div>
                        </div>
                      </div>`).join('')}
                 </div>
@@ -1036,7 +1045,7 @@ async function renderReader() {
           <div class="flex items-center gap-2"><span class="text-[12px] font-bold uppercase text-blue-500">${item.source}</span>${isNew ? '<span class="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-black tracking-tighter">NEW</span>' : ''}</div>
           <span class="text-[12px] font-medium text-slate-400 uppercase mr-10">${formatDateTime(item.date)}</span>
         </div>
-        <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10">${item.title}</h2>
+        <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10 cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(item.link)}${searchParam}&page=${PAGE}'">${item.title}</h2>
         <p class="text-[13px] text-slate-400 mt-1 leading-snug line-clamp-2 pr-4">${item.desc || ''}</p>
         <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
           <div class="flex gap-6">
@@ -1044,11 +1053,12 @@ async function renderReader() {
             <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[10px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'} whitespace-nowrap">Read Later</span></div>
             <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
           </div>
-          <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(item.link)}&search=${encodeURIComponent(SEARCH_TERM)}" class="material-icons-round text-xl">link</a></div>
+          <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(item.link)}${searchParam}&page=${PAGE}" class="material-icons-round text-xl">link</a></div>
         </div>
       </div>
     </article>`}).join('')}
-    <div id="paginationControls" class="flex justify-center items-center gap-3 py-8 text-slate-500">
+
+    <div id="paginationControls" class="flex justify-center items-center gap-3 pb-4 pt-8 text-slate-500">
       ${(() => {
       const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
       if (totalPages <= 1) return '';
@@ -1117,6 +1127,11 @@ async function renderReader() {
       return pages.join('');
     })()}
     </div>
+    <div class="flex justify-center pb-12">
+       <button onclick="selectAllVisible()" class="text-[10px] font-black uppercase text-white bg-blue-600 tracking-widest px-6 py-3 rounded-full hover:bg-blue-500 transition-colors shadow-lg shadow-blue-900/40">
+          Select All Cards
+       </button>
+    </div>
   </main>
   <div id="floatUp" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" class="fixed bottom-6 right-6 glass border border-slate-700 rounded-full p-3 shadow-xl z-40 hidden transition-all duration-300 hover:bg-slate-800">
     <span class="material-icons-round text-blue-400 text-2xl">arrow_upward</span>
@@ -1126,8 +1141,10 @@ async function renderReader() {
   </div>
   <div id="bulkBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass border border-slate-700 rounded-full px-6 py-3 hidden flex items-center gap-8 shadow-2xl z-50">
      <button onclick="bulkPlay()" class="flex flex-col items-center"><span class="material-icons-round text-blue-500">volume_up</span><span class="text-[9px] uppercase font-bold text-blue-500">Listen</span></button>
-     <button onclick="bulkBookmark()" class="flex flex-col items-center"><span class="material-icons-round text-orange-500">star</span><span class="text-[9px] uppercase font-bold text-orange-500">Save</span></button>
+     <button onclick="bulkBookmark()" class="flex flex-col items-center"><span class="material-icons-round text-orange-500">bookmark</span><span class="text-[9px] uppercase font-bold text-orange-500">Save</span></button>
      <button onclick="bulkRead()" class="flex flex-col items-center"><span class="material-icons-round text-green-500">check_circle</span><span class="text-[9px] uppercase font-bold text-green-500">Read</span></button>
+     <div class="h-6 w-[1px] bg-slate-700"></div>
+     <button onclick="bulkFav()" class="flex flex-col items-center"><span class="material-icons-round text-yellow-500">star</span><span class="text-[9px] uppercase font-bold text-yellow-500">Fav</span></button>
      <div class="h-6 w-[1px] bg-slate-700"></div>
      <button onclick="clearSelection()" class="material-icons-round text-slate-400">close</button>
   </div>
@@ -1209,6 +1226,17 @@ async function renderReader() {
     lastScroll = currentScroll <= 0 ? 0 : currentScroll;
   });
 
+  function selectAllVisible() {
+    const cards = document.querySelectorAll('.news-card:not(.hidden-card)');
+    cards.forEach(card => {
+        const inputs = card.querySelectorAll('.bulk-check');
+        inputs.forEach(i => i.checked = true);
+    });
+    updateBulkBar();
+    // Scroll to bottom so user sees the bulk bar
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  }
+
   function updateBulkBar() { const checked = document.querySelectorAll('.bulk-check:checked'); const bar = document.getElementById('bulkBar'); if (checked.length > 0) { bar.classList.remove('hidden'); bar.classList.add('flex'); } else { bar.classList.add('hidden'); bar.classList.remove('flex'); } }
   function playAll() {
     let playUrls = [];
@@ -1226,13 +1254,13 @@ async function renderReader() {
       playUrls.push(link);
       readUrls.push(link);
       
-      // LOGIC: If Acting on Child OR Parent, NUKE THE CLUSTER (Mark all related read)
-      // This ensures we don't leave stale duplicates behind.
+      // LOGIC: If Acting on Child, Only mark CHILD read.
+      // If Acting on Parent, NUKE THE CLUSTER (Old Behavior).
       const related = card.dataset.relatedLinks;
-      if (related) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
+      if (!isChild && related) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
       
-      // Also ensure Parent is marked if we clicked a child
-      if (isChild) readUrls.push(card.dataset.link);
+      // Also ensure Parent is marked if we clicked a child (Wait, NO. V120.0 Change: Do NOT mark parent if child clicked)
+      // if (isChild) readUrls.push(card.dataset.link); <-- REMOVED
     });
     
     if (playUrls.length === 0) return;
@@ -1251,10 +1279,10 @@ async function renderReader() {
       
       links.push(link);
       
-      // Cluster Nuke Logic
+      // Cluster Nuke Logic: Only if PARENT selected
       const related = card.dataset.relatedLinks;
-      if (related) try { links = links.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
-      if (isChild) links.push(card.dataset.link);
+      if (!isChild && related) try { links = links.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
+      // if (isChild) links.push(card.dataset.link); <-- REMOVED
     });
     const search = encodeURIComponent(document.getElementById('searchInput').value); 
     window.location.href = '${scriptUrl}?bulkRead=' + encodeURIComponent(JSON.stringify(links)) + '&search=' + search + '&page=${PAGE}'; 
@@ -1272,12 +1300,40 @@ async function renderReader() {
       // Save specific item
       bookmarkItems.push({ title: d.title, link: d.link, source: d.source, date: d.date, desc: '' });
       
-      // Cluster Nuke: Mark REST as read
+      // Cluster Nuke: Mark REST as read (Only if Parent)
       const related = card.dataset.relatedLinks;
-      if (related) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
-      if (isChild) readUrls.push(card.dataset.link);
+      if (!isChild && related) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
+      // if (isChild) readUrls.push(card.dataset.link); <-- REMOVED
     });
     window.location.href = '${scriptUrl}?bulkBookmark=' + encodeURIComponent(JSON.stringify(bookmarkItems)) + '&readLinks=' + encodeURIComponent(JSON.stringify(readUrls)) + '&page=${PAGE}'; 
+  }
+  function bulkFav() { 
+    const checked = Array.from(document.querySelectorAll('.bulk-check:checked'));
+    if (checked.length === 0) return;
+    let favItem = null;
+    // For Fav, typically we only fav specific items. Does not have bulk processing in same way.
+    // NOTE: Logic supports multiple, but typically user Favs one.
+    // For simplicity, we loop.
+    checked.forEach(cb => {
+       const isChild = cb.classList.contains('child-check');
+       const card = cb.closest('.news-card');
+       const d = isChild ? cb.dataset : card.dataset;
+       // Trigger individual fav URL - wait, we can't do multiple redirects. 
+       // Needs Bulk Fav Handler logic or simplified "Fav Last".
+       // Let's implement actual Bulk Fav Handler later if needed, for now reuse single favorite param?
+       // No, we need a bulk param.
+    });
+    // REVISION: We need a bulkFavorite param in main script to handle array.
+    // Since we don't have it yet, let's just loop sequentially with small delay? No.
+    // Let's create a bulk param structure now.
+    let favs = [];
+    checked.forEach(cb => {
+       const isChild = cb.classList.contains('child-check');
+       const card = cb.closest('.news-card');
+       const d = isChild ? cb.dataset : card.dataset;
+       favs.push({ title: d.title, link: d.link, source: d.source, date: d.date, desc: '' });
+    });
+    window.location.href = '${scriptUrl}?bulkFavorite=' + encodeURIComponent(JSON.stringify(favs)) + '&page=${PAGE}';
   }
   function clearSelection() { document.querySelectorAll('.bulk-check').forEach(cb => cb.checked = false); updateBulkBar(); }
   function clearSearchBar() { document.getElementById('searchInput').value = ''; document.getElementById('clearSearch').classList.add('hidden'); filterNews(); }

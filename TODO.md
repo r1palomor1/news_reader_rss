@@ -14,6 +14,44 @@
 
 ---
 
+## 🌟 COMPLETED (V119.x - V120.x Series)
+
+### ✅ Footer Select All
+**Status:** DONE - V120.1
+- Added "SELECT ALL VISIBLE" button above pagination.
+- Allows one-tap selection of all articles on the current page to easily perform bulk actions (Read/Save/Favorite).
+
+### ✅ Loading Sources Flow (State Optimization)
+**Status:** DONE - V120.x
+- **Resolution:** Re-evaluated and optimized source loading/syncing method.
+- **Outcome:** Improved performance during state transitions (choosing sources, tag editor) by reducing redundant syncs.
+
+### ✅ Smart Cluster Logic (V120.0)
+**Status:** DONE - V120.0
+- **Granular Child Actions:** Interacting with a child item (Listen, Bookmark, Read) ONLY affects that specific item.
+- **Nuclear Parent Actions:** Interacting with the Parent card still affects the entire cluster (marks all read).
+- **Fix:** Prevents accidental "nuking" of unread content when user only wants to save/hear one specific angle of a story.
+
+### ✅ Bulk Favorites & Icon Update
+**Status:** DONE - V119.9 / V120.0
+- Added "Fav" (Star) button to Bulk Actions Bar.
+- Updated Bulk "Save" icon to Bookmark style.
+- Implemented bulk favoriting logic.
+
+### ✅ In-App Browser Navigation
+**Status:** DONE - V119.8
+- Changed article links to use `Safari.openInApp(url, false)`.
+- Keeps user inside the Scriptable environment, preserving scroll position and app state when returning from an article.
+
+### ✅ Clickable Parent Titles
+**Status:** DONE - V119.7
+- Parent card titles are now clickable (link to article), improving accessibility and ease of use.
+
+### ✅ Header UI Refactor
+**Status:** DONE - V119.6
+- Moved "% Clustered" stats from H1 to Subtitle.
+- Cleaned up Header UI to be less cluttered.
+
 ## 🌟 COMPLETED (V114.x Series)
 
 ### ✅ Bookmarks Return Preserves Page
@@ -42,17 +80,21 @@
 
 ---
 
-## 🚀 CRITICAL / IMMEDIATE
-
-### 🔴 Re-evaluate Loading Sources Flow (State-Change Optimization)
-**Status:** High Priority
-**Task:** Re-examine the current source loading/syncing method. The aim is to restore a previous "good method" that was a significant time-saver when changing states (choosing sources, tag editor, adding feeds, refreshing all). 
-**UI Goal:** Ensure that navigating between screens doesn't trigger redundant or blocking syncs, maintaining a fast, fluid experience.
-**Internal Check:** Review Git history for the multi-stage or background sync logic that handled state transitions smoothly without full-page reloads.
-
----
-
 ## Future Enhancements / Backlog
+
+### Article Image Fetching (Thumbnails)
+**Status:** Planned
+**Priority:** Medium
+**Task:** Update RSS parser to extract image URLs (`media:content`, `enclosure`, or `<img>` in description).
+**Notes:** Store URL only (lightweight). Required for Immersive View.
+
+### Immersive View / Card Mode (Toggle)
+**Status:** Planned - Standard vs. Immersive
+**Priority:** Medium (Requires Image Fetching)
+**Concept:** Replace Header "Play All" button with a View Toggle (List/Card).
+1. **State Management:** Implement `viewMode` persistence (`card` vs `compact`).
+2. **Render Logic:** Create a second render HTML template for "Card Mode" (bigger image, badges, source count bubble).
+3. **Badges:** Calculate "Breaking", "Developing", "Steady" tags based on cluster velocity and time.
 
 ### Exact Pulse Tag Filtering
 **Status:** Deferred - Complex logic required
@@ -141,13 +183,6 @@
 **Logic:**
 - **Buckets:** Hot (<6h), Today (6-24h), Yesterday (24-48h), Older (>48h).
 - **Interaction:** Collapsed accordions, Batch 30 items, Mark Visible Read.
-
-### 3. FOOTER SELECT ALL (UX Improvement)
-**Objective:** Allow bulk selection of all visible items from the footer.
-**Logic:**
-- Add "Select All Visible" button below pagination.
-- onClick: Iterates visible cards, checks check-boxes, triggers `updateBulkBar()`.
-- Result: Activates standard Bulk Action Bar (Listen, Save, Read).
 
 ### 4. SOURCE WEIGHTING (Soft Ranking)
 **Objective:** Surface trusted sources higher within buckets.
