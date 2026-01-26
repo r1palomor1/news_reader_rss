@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V120.1.1
-// Status: V120.1 Footer Select All (Blue UI) & White Cluster Stats
+// Version: V130.0
+// Status: Fix Alert Bug - Proper Delete Confirmation
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -520,7 +520,15 @@ if (args.queryParameters.bulkFavorite) {
 
 if (args.queryParameters.idx) {
   const i = parseInt(args.queryParameters.idx)
-  if (args.queryParameters.delete && (await new Alert().addDestructiveAction("Delete") || true)) FEEDS.splice(i, 1)
+  if (args.queryParameters.delete) {
+    const a = new Alert()
+    a.message = `Delete "${FEEDS[i].name}"?`
+    a.addDestructiveAction("Delete")
+    a.addCancelAction("Cancel")
+    if (await a.present() === 0) {
+      FEEDS.splice(i, 1)
+    }
+  }
   if (args.queryParameters.move) {
     const dir = args.queryParameters.move
     if (dir === "up" && i > 0) [FEEDS[i], FEEDS[i - 1]] = [FEEDS[i - 1], FEEDS[i]]
