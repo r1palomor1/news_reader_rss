@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V136.0
-// Status: Error Recovery - Failure Notifications
+// Version: V137.0
+// Status: Input Sanitization - Preventive Validation
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -235,6 +235,15 @@ function escapeHtml(text) {
     .replace(/'/g, '&#039;')
 }
 
+function sanitizeInput(text, maxLength = 200) {
+  if (!text) return ''
+  // Trim and limit length
+  let cleaned = text.trim().substring(0, maxLength)
+  // Remove control characters and null bytes
+  cleaned = cleaned.replace(/[\x00-\x1F\x7F]/g, '')
+  return cleaned
+}
+
 async function fetchSingleFeed(url, name) {
   const path = fm.joinPath(CACHE_DIR, name.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json")
   const freshUrl = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`
@@ -303,7 +312,8 @@ async function syncAllFeeds() {
 
 if (args.queryParameters.addPulseTag) {
   const type = args.queryParameters.type
-  const tag = args.queryParameters.tag
+  const tag = sanitizeInput(args.queryParameters.tag)
+  if (!tag) { Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}&page=${PAGE}`); return }
   const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
 
   let tags = getTags(file)
@@ -1659,7 +1669,20 @@ async function validateUrl(url) {
 }
 
 if (args.queryParameters.addFeed) {
-  const newName = args.queryParameters.name; const newUrl = args.queryParameters.url;
+  const newName = sanitizeInput(args.queryParameters.name, 100)
+  const newUrl = args.queryParameters.url.trim()
+  
+  // Basic URL validation
+  if (!newName || !newUrl || !newUrl.match(/^https?:\/\/.+/i)) {
+    const alert = new Alert()
+    alert.title = "Invalid Input"
+    alert.message = "Please provide a valid feed name and URL (must start with http:// or https://)."
+    alert.addAction("OK")
+    await alert.present()
+    Safari.open(`${scriptUrl}?state=MANAGER`)
+    return
+  }
+  
   let validation = await validateUrl(newUrl);
   if (validation.status === "green") {
     await fetchSingleFeed(newUrl, newName);
