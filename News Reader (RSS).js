@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V135.0
-// Status: Memory Leak Fix - Debug Log Rotation
+// Version: V136.0
+// Status: Error Recovery - Failure Notifications
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -254,16 +254,16 @@ async function fetchSingleFeed(url, name) {
     })
     const filtered = items.filter(i => (Date.now() - new Date(i.date).getTime()) < expiry)
     fm.writeString(path, JSON.stringify(filtered));
-    return filtered
+    return { success: true, name: name }
   } catch (error) {
     logToFile(`[Fetch Error] ${name}: ${error.message}`)
     if (fm.fileExists(path)) {
       logToFile(`[Fetch] Using cached data for ${name}`)
       const cached = JSON.parse(fm.readString(path))
-      return cached.filter(i => (Date.now() - new Date(i.date).getTime()) < expiry)
+      return { success: false, name: name, cached: true }
     }
     logToFile(`[Fetch] No cache available for ${name}`)
-    return []
+    return { success: false, name: name, cached: false }
   }
 }
 
@@ -280,13 +280,23 @@ async function syncAllFeeds() {
       </script>
     </body></html>`
   await hud.loadHTML(hudHtml); hud.present(false)
-  await Promise.all(enabledFeeds.map(f => fetchSingleFeed(f.url, f.name)));
+  const results = await Promise.all(enabledFeeds.map(f => fetchSingleFeed(f.url, f.name)));
   
   // Small delay to ensure all file writes complete
   await new Promise(resolve => Timer.schedule(100, false, resolve));
   
   await generateMasterFeed()
   fm.writeString(VISIT_FILE, String(Date.now()))
+  
+  // Show failure notification if any feeds failed
+  const failures = results.filter(r => !r.success && !r.cached);
+  if (failures.length > 0) {
+    const alert = new Alert()
+    alert.title = "⚠️ Feed Sync Issues"
+    alert.message = `${failures.length} feed${failures.length > 1 ? 's' : ''} failed to sync:\n\n${failures.map(f => f.name).join('\n')}\n\nCheck Debug Logs for details.`
+    alert.addAction("OK")
+    await alert.present()
+  }
 }
 
 // --- TAG EDITOR ACTIONS ---
