@@ -9,8 +9,8 @@
 ## Priority 2: High Impact Issues (2-3 hours)
 - [x] 5. **Memory Leak - READ_HISTORY** - Implement rotation (max 500 items) ✅ V134.0
 - [ ] 6. **Memory Leak - Debug Log** - Proper log rotation with max file size
-- [ ] 7. **Error Recovery** - User-facing notifications for fetch failures
-- [ ] 8. **Input Sanitization** - Validate/sanitize all user inputs before URL encoding
+- [x] 7. **Error Recovery** - User-facing notifications for fetch failures ✅ V136.0
+- [x] 8. **Input Sanitization** - Validate/sanitize all user inputs before URL encoding ✅ V137.0
 - [ ] 9. **Remove Unused Variables** - Clean up `autoOpenTagEditor` (Line 586)
 
 ## Priority 3: Performance Optimization (3-4 hours)
