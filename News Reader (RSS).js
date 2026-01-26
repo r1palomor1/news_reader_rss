@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V132.0
-// Status: Fix Race Conditions - Sequential File Writes
+// Version: V132.1
+// Status: Parallel Processing with Safety Delay
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -248,11 +248,10 @@ async function syncAllFeeds() {
       </script>
     </body></html>`
   await hud.loadHTML(hudHtml); hud.present(false)
+  await Promise.all(enabledFeeds.map(f => fetchSingleFeed(f.url, f.name)));
   
-  // Sequential processing to prevent race conditions
-  for (const feed of enabledFeeds) {
-    await fetchSingleFeed(feed.url, feed.name)
-  }
+  // Small delay to ensure all file writes complete
+  await new Promise(resolve => Timer.schedule(100, false, resolve));
   
   await generateMasterFeed()
   fm.writeString(VISIT_FILE, String(Date.now()))
