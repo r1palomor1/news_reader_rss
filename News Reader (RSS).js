@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V139.4
-// Status: Lazy Clustering Cache - Fixed async/await bug
+// Version: V140.0
+// Status: Search Debounce - Performance Optimization
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -1051,7 +1051,7 @@ async function renderReader() {
     <div class="px-4 pb-2 relative">
       <div class="relative flex items-center">
         <span class="material-icons-round absolute left-3 text-slate-500 text-sm">search</span>
-        <input type="search" id="searchInput" oninput="filterNews()" value="${SEARCH_TERM}" placeholder="Search for topics or -exclude keywords" class="w-full bg-slate-900/50 border border-slate-700 rounded-lg py-2 pl-10 pr-10 text-[15px] focus:outline-none focus:border-blue-500 text-slate-100">
+        <input type="search" id="searchInput" oninput="debouncedFilter()" value="${SEARCH_TERM}" placeholder="Search for topics or -exclude keywords" class="w-full bg-slate-900/50 border border-slate-700 rounded-lg py-2 pl-10 pr-10 text-[15px] focus:outline-none focus:border-blue-500 text-slate-100">
         <span id="clearSearch" onclick="clearSearchBar()" class="material-icons-round absolute right-3 text-slate-400 text-sm cursor-pointer ${SEARCH_TERM ? '' : 'hidden'}">close</span>
       </div>
     </div>
@@ -1287,6 +1287,14 @@ async function renderReader() {
     const params = 'search=' + search + '&page=${PAGE}&title=' + encodeURIComponent(card.dataset.title) + '&source=' + encodeURIComponent(card.dataset.source) + '&date=' + encodeURIComponent(card.dataset.date) + '&desc=' + encodeURIComponent(card.dataset.desc); 
     window.location.href = '${scriptUrl}?' + type + '=' + encodeURIComponent(card.dataset.link) + '&' + params + extra; 
   }
+  
+  // V140.0: Debounce search input to reduce DOM filtering during typing
+  let searchDebounceTimer = null;
+  function debouncedFilter() {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(filterNews, 300);
+  }
+  
   function filterNews() {
     const query = document.getElementById('searchInput').value.toLowerCase().trim();
     const clearBtn = document.getElementById('clearSearch');
