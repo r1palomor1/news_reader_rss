@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V138.0
-// Status: Input Sanitization - Preventive Validation
+// Version: V139.4
+// Status: Lazy Clustering Cache - Fixed async/await bug
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -932,21 +932,64 @@ async function renderReader() {
   const pulseTagsList = pulseData.tags;
   const pulseTagArticles = pulseData.articles;
   const heatThreshold = (CATEGORY === "ALL SOURCES") ? 8 : 4;
-  let rawPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
 
   let filteredPool = []
 
   // V118.1: If ALL SOURCES, items are ALREADY clustered in the file.
   if (CATEGORY === "ALL SOURCES") {
+    let rawPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
     filteredPool = rawPool; // Data is already {type: 'cluster', ...}
     logToFile(`[Render] Using Pre-Clustered Master File: ${filteredPool.length} entities.`);
   } else {
-    // Single Source: We still need to cluster on the fly (lightweight)
-    logToFile(`[Render] Clustering Single Source on fly...`);
-    filteredPool = groupArticles(rawPool);
+    // V139.3: Lazy clustering cache for single sources
+    // Avoids re-clustering on every view by caching clustered results
+    const rawCachePath = fm.joinPath(CACHE_DIR, CATEGORY.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json");
+    const clusteredCachePath = fm.joinPath(CACHE_DIR, CATEGORY.replace(/[^a-z0-9]/gi, '_').toLowerCase() + "_clustered.json");
+    
+    // Check if clustered cache is valid (newer than raw source)
+    let useCache = false;
+    if (fm.fileExists(clusteredCachePath) && fm.fileExists(rawCachePath)) {
+      const rawModTime = fm.modificationDate(rawCachePath).getTime();
+      const clusteredModTime = fm.modificationDate(clusteredCachePath).getTime();
+      useCache = clusteredModTime > rawModTime; // Cache valid if newer than source
+    }
+    
+    if (useCache) {
+      // FAST PATH: Load pre-clustered data from cache
+      logToFile(`[Render] Using Cached Clustered Results for ${CATEGORY}`);
+      // V139.4: Fixed missing await - getJsonFile is async
+      const cached = await getJsonFile(clusteredCachePath);
+      filteredPool = Array.isArray(cached) ? cached : [];
+      
+      // Apply unread filter to already-clustered entities
+      if (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") {
+        filteredPool = filteredPool.filter(entity => {
+          if (entity.type === 'cluster') {
+            const mainUnread = !READ_HISTORY.includes(entity.link);
+            const hasUnreadRelated = entity.relatedItems && entity.relatedItems.some(r => !READ_HISTORY.includes(r.link));
+            return mainUnread || hasUnreadRelated;
+          } else {
+            return !READ_HISTORY.includes(entity.link);
+          }
+        });
+      }
+    } else {
+      // SLOW PATH: Cluster from scratch and save to cache
+      logToFile(`[Render] Clustering ${CATEGORY} and caching...`);
+      
+      // Apply unread filter to raw articles before clustering (for display)
+      let rawPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
+      filteredPool = groupArticles(rawPool);
+      
+      // Save FULL clustered dataset to cache (unfiltered for reusability)
+      const fullClustered = groupArticles(CACHED_ITEMS);
+      fm.writeString(clusteredCachePath, JSON.stringify(fullClustered));
+    }
 
     // Natural Sort
-    filteredPool.sort((a, b) => new Date(b.date) - new Date(a.date));
+    if (Array.isArray(filteredPool)) {
+      filteredPool.sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
   }
 
   const totalCount = filteredPool.length;
