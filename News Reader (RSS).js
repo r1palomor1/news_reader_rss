@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V141.0
-// Status: Extract Clustering Constants - Moved thresholds to top-level
+// Version: V142.0
+// Status: Refactor - Consolidated Tag Handlers (Task 18)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -315,125 +315,124 @@ async function syncAllFeeds() {
 
 // --- TAG EDITOR ACTIONS ---
 
+// V142.1 Refactor: Consolidated Tag Handler
+function updateTagFile(type, updateFn) {
+  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+  let tags = getTags(file)
+  const result = updateFn(tags)
+  if (result) saveTags(file, result)
+}
+
 if (args.queryParameters.addPulseTag) {
   const type = args.queryParameters.type
   const tag = sanitizeInput(args.queryParameters.tag)
-  if (!tag) { Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}&page=${PAGE}`); return }
-  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
 
-  let tags = getTags(file)
-
-  // Add tag if not already present (case-insensitive)
-  if (!tags.some(t => t.toLowerCase() === tag.toLowerCase())) {
-    tags.push(tag)
-    saveTags(file, tags)
+  if (tag) {
+    updateTagFile(type, (tags) => {
+      // Add if unique
+      if (!tags.some(t => t.toLowerCase() === tag.toLowerCase())) {
+        tags.push(tag)
+        return tags
+      }
+      return null
+    })
+    Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`)
+  } else {
+    // If no tag provided, just open editor
+    Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}&page=${PAGE}`)
   }
-
-  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`); return
+  return
 }
 
 if (args.queryParameters.smartEditTags) {
   const type = args.queryParameters.type
-  const input = args.queryParameters.input
-  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+  const input = args.queryParameters.input || ""
 
-  // Parse input for + (add) and - (remove) operations
-  const items = input.split(',').map(t => t.trim())
-  let toAdd = []
-  let toRemove = []
+  updateTagFile(type, (tags) => {
+    const items = input.split(',').map(t => t.trim())
+    let toAdd = [], toRemove = []
 
-  items.forEach(item => {
-    if (item.startsWith('+')) {
-      toAdd.push(item.substring(1).trim())
-    } else if (item.startsWith('-')) {
-      toRemove.push(item.substring(1).trim())
-    } else if (item.length > 0) {
-      toAdd.push(item) // Default to add if no prefix
+    items.forEach(item => {
+      if (item.startsWith('+')) toAdd.push(item.substring(1).trim())
+      else if (item.startsWith('-')) toRemove.push(item.substring(1).trim())
+      else if (item.length > 0) toAdd.push(item)
+    })
+
+    // 1. Remove tags
+    if (toRemove.length > 0) {
+      tags = tags.filter(t => !toRemove.some(r => r.toLowerCase() === t.toLowerCase()))
     }
+
+    // 2. Add tags (avoid duplicates)
+    toAdd.forEach(tag => {
+      if (!tags.some(t => t.toLowerCase() === tag.toLowerCase())) tags.push(tag)
+    })
+
+    return tags
   })
 
-  // Load existing tags
-  let tags = getTags(file)
-
-  // Remove specified tags (case-insensitive)
-  if (toRemove.length > 0) {
-    tags = tags.filter(t => !toRemove.some(r => r.toLowerCase() === t.toLowerCase()))
-  }
-
-  // Add new tags (avoid duplicates, case-insensitive)
-  toAdd.forEach(tag => {
-    if (!tags.some(t => t.toLowerCase() === tag.toLowerCase())) {
-      tags.push(tag)
-    }
-  })
-
-  // Save back to file
-  saveTags(file, tags)
-
-  // Reload Tag Editor
-  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}&page=${PAGE}`); return
+  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}&page=${PAGE}`)
+  return
 }
 
 if (args.queryParameters.addBulkTags) {
   const type = args.queryParameters.type
-  const newTags = args.queryParameters.newTags
-  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
+  const newTags = args.queryParameters.newTags || ""
 
-  // Get existing tags
-  let existingTags = getTags(file)
+  updateTagFile(type, (tags) => {
+    const parsed = newTags.split(',').map(t => t.trim()).filter(t => t.length > 0)
+    // Combine and deduplicate
+    const combined = [...tags, ...parsed]
+    return combined.filter((t, i, arr) => arr.indexOf(t) === i)
+  })
 
-  // Parse new tags (comma-separated)
-  let parsedNewTags = newTags.split(',').map(t => t.trim()).filter(t => t.length > 0)
-
-  // Append new tags to existing
-  let allTags = [...existingTags, ...parsedNewTags]
-
-  // Remove duplicates
-  allTags = allTags.filter((t, i, arr) => arr.indexOf(t) === i)
-
-  // Save back to file
-  saveTags(file, allTags)
-
-  // Reload Tag Editor
-  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`); return
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`)
+  return
 }
 
-if (args.queryParameters.saveBulkTags) {
+if (args.queryParameters.saveBulkTags || args.queryParameters.saveTags) {
   const type = args.queryParameters.type
-  const tagsText = args.queryParameters.tags
-  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
-  const tags = tagsText.split('\n').map(t => t.trim()).filter(t => t.length > 0)
-  saveTags(file, tags)
-  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`); return
-}
+  const tagsText = args.queryParameters.tags || ""
 
-if (args.queryParameters.saveTags) {
-  const type = args.queryParameters.type
-  const tagsText = args.queryParameters.tags
-  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
-  const tags = tagsText.split('\n').map(t => t.trim()).filter(t => t.length > 0)
-  saveTags(file, tags)
-  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`); return
+  updateTagFile(type, () => {
+    // Complete overwrite
+    return tagsText.split('\n').map(t => t.trim()).filter(t => t.length > 0)
+  })
+
+  Safari.open(`${scriptUrl}?reopenTagEditor=true&mode=${type}&page=${PAGE}`)
+  return
 }
 
 if (args.queryParameters.addTag) {
   const type = args.queryParameters.type
-  const val = args.queryParameters.val.trim()
-  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
-  let tags = getTags(file)
-  if (!tags.includes(val)) tags.push(val)
-  saveTags(file, tags)
-  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}`); return
+  const val = args.queryParameters.val ? args.queryParameters.val.trim() : ""
+
+  if (val) {
+    updateTagFile(type, (tags) => {
+      if (!tags.includes(val)) {
+        tags.push(val)
+        return tags
+      }
+      return null
+    })
+  }
+  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=${type}`)
+  return
 }
 
 if (args.queryParameters.deleteTag) {
   const type = args.queryParameters.type
   const idx = parseInt(args.queryParameters.idx)
-  const file = type === 'exclude' ? EXCLUSION_FILE : INCLUSION_FILE
-  let tags = getTags(file)
-  tags.splice(idx, 1)
-  saveTags(file, tags)
-  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=manage`); return
+
+  updateTagFile(type, (tags) => {
+    if (!isNaN(idx) && idx >= 0 && idx < tags.length) {
+      tags.splice(idx, 1)
+      return tags
+    }
+    return null
+  })
+  Safari.open(`${scriptUrl}?state=TAG_EDITOR&mode=manage`)
+  return
 }
 
 // --- STANDARD ACTION HANDLERS ---
