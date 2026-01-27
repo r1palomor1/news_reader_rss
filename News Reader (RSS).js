@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V140.1
-// Status: Search Debounce - Fixed immediate UI feedback separation
+// Version: V141.0
+// Status: Extract Clustering Constants - Moved thresholds to top-level
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -26,6 +26,11 @@ const INCLUSION_FILE = fm.joinPath(dir, "tag_inclusions.txt")
 // Configuration Constants
 const MAX_HISTORY = 250  // Maximum read history items to retain
 const MAX_LOG_SIZE = 10000  // Maximum debug log size in characters
+
+// Clustering Algorithm Constants
+const BASE_THRESHOLD = 0.28  // Jaccard similarity threshold for standard titles
+const SHORT_THRESHOLD = 0.20  // Lower threshold for short titles (≤5 tokens)
+const TIME_WINDOW = 36 * 60 * 60 * 1000  // 36-hour clustering window (ms)
 
 if (!fm.fileExists(CACHE_DIR)) fm.createDirectory(CACHE_DIR)
 
@@ -757,9 +762,6 @@ function groupArticles(items) {
   });
 
   const clusters = [];
-  const BASE_THRESHOLD = 0.28; // V118.8: Lowered from 0.31
-  const SHORT_THRESHOLD = 0.20; // V118.8: Lowered from 0.25 (Aggressive for shorts)
-  const TIME_WINDOW = 36 * 60 * 60 * 1000;
 
   // Reset Stats
   CLUSTER_STATS.compared = 0; CLUSTER_STATS.matched = 0; CLUSTER_STATS.rejectedByThreshold = 0; CLUSTER_STATS.rejectedByTime = 0;
