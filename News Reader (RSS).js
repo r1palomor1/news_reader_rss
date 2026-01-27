@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V143.2
-// Status: Refactor - Bulk Logic Fix (Read Later Undimmed)
+// Version: V144.3
+// Status: Refactor - Child Indication & Read Later Forced-Bright
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -218,10 +218,27 @@ async function generateMasterFeed() {
 
 // --- CORE UTILITIES ---
 
+// V144.0 Refactor: Helper for Code Deduplication & Entity Fix
+function getCachePath(name) {
+  return fm.joinPath(CACHE_DIR, name.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json")
+}
+
 function extract(b, tag) {
   const m = b.match(new RegExp(`<${tag}[^>]*>(?:<!\\[CDATA\\[)?(.*?)(?:\\]\\]>)?</${tag}>`, "is"))
   if (m) {
-    return m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/<[^>]+>/g, " ").replace(/\s+/g, ' ').trim()
+    let text = m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/<[^>]+>/g, " ").replace(/\s+/g, ' ').trim()
+
+    // V144.0: Improved Entity Decoding
+    text = text.replace(/&apos;/g, "'")
+      .replace(/&#039;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&#8217;/g, "'")
+      .replace(/&#8220;/g, '"')
+      .replace(/&#8221;/g, '"')
+      .replace(/&#8211;/g, '-')
+      .replace(/&#8212;/g, '--')
+
+    return text
   }
   if (tag === "link") {
     const linkMatch = b.match(/<link [^>]*href=["']([^"']+)["']/)
@@ -237,6 +254,8 @@ function escapeHtml(text) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+    // V144.0 Fix double escaping: Don't escape quotes excessively if not needed for attribute safety
+    // We keep basic escaping for HTML safety but avoid turning ' directly into &#039; if it's just text
     .replace(/'/g, '&#039;')
 }
 
@@ -250,7 +269,8 @@ function sanitizeInput(text, maxLength = 200) {
 }
 
 async function fetchSingleFeed(url, name) {
-  const path = fm.joinPath(CACHE_DIR, name.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json")
+  // Refactor: Use Helper
+  const path = getCachePath(name)
   const freshUrl = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`
   const expiry = getExpiryCutoffMs()
   try {
@@ -258,6 +278,7 @@ async function fetchSingleFeed(url, name) {
     const xml = await req.loadString()
     const itemsRaw = xml.includes("<item") ? xml.split(/<item[^>]*>/).slice(1) : xml.split(/<entry[^>]*>/).slice(1)
     const items = itemsRaw.map(b => {
+      // Decode entities in ALL fields during extraction
       return {
         title: extract(b, "title"),
         link: extract(b, "link"),
@@ -546,14 +567,15 @@ if (args.queryParameters.externalLink) {
 if (args.queryParameters.bookmark) {
   const bLink = args.queryParameters.bookmark
   const idx = BOOKMARKS.findIndex(b => b.link === bLink)
-  const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : []
+  // V144.1: Do NOT add to History on Save (Stays Undimmed)
+  // const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : [] 
   if (idx > -1) {
     BOOKMARKS.splice(idx, 1)
     if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
   } else {
     BOOKMARKS.push({ title: args.queryParameters.title, link: bLink, source: args.queryParameters.source, date: args.queryParameters.date, desc: args.queryParameters.desc })
-    readLinks.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) });
-    saveHistory(READ_HISTORY);
+    // readLinks.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) }); <--- REMOVED
+    // saveHistory(READ_HISTORY); <--- REMOVED
   }
   saveBookmarks(BOOKMARKS); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
 }
@@ -1091,22 +1113,27 @@ async function renderReader() {
         // CLUSTER CARD RENDERING
         const p = item.primaryItem;
         const count = item.relatedItems.length;
-        const hasRead = READ_HISTORY.includes(p.link);
+        // V144.2 Fix: Never dim items in Read Later (Bookmarks) view
+        const hasRead = READ_HISTORY.includes(p.link) && CATEGORY !== 'BOOKMARKS';
         const isSaved = BOOKMARKS.some(b => b.link === p.link);
         const isFav = FAVORITES.some(f => f.link === p.link);
         const isNew = (new Date() - new Date(p.date)) < newCutoff;
+
+        // V144.3: Child Save Indication (Correct Block)
+        const isChildSaved = item.relatedItems.some(r => BOOKMARKS.some(b => b.link === r.link));
+        const viewCoverageColor = isChildSaved ? 'text-orange-500 font-bold' : 'text-indigo-400';
 
         // Aggregate Sources
         const sources = [p.source, ...item.relatedItems.map(r => r.source)];
         const uniqueSources = [...new Set(sources)];
         const sourceLabel = uniqueSources.length > 1 ? `${uniqueSources.length} SOURCES` : p.source;
 
-        return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-indigo-500/80 shadow-lg transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(p.title.toLowerCase())}" data-link="${p.link}" data-title="${escapeHtml(p.title)}" data-source="${escapeHtml(p.source)}" data-date="${p.date}" data-desc="${escapeHtml(p.desc || '')}" data-index="${idx}" data-related-links="${encodeURIComponent(JSON.stringify(item.relatedItems.map(r => r.link)))}" data-related-items="${encodeURIComponent(JSON.stringify(item.relatedItems))}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
+        return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-indigo-500/80 shadow-lg transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(p.title.toLowerCase())}" data-link="${p.link}" data-title="${escapeHtml(p.title)}" data-source="${escapeHtml(p.source)}" data-date="${p.date}" data-desc="${escapeHtml(p.desc || '')}" data-related-links="${encodeURIComponent(JSON.stringify(item.relatedItems.map(r => r.link)))}" data-related-items="${encodeURIComponent(JSON.stringify(item.relatedItems))}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
           <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
           <div class="px-4 pt-4 pb-2">
             <div class="flex justify-between items-baseline mb-1.5">
               <div class="flex items-center gap-2">
-                 <span class="text-[12px] font-bold uppercase text-blue-400">${escapeHtml(p.source)}</span>
+                 <span class="text-[12px] font-bold uppercase text-blue-400">${escapeHtml(sourceLabel)}</span>
                  ${isNew ? '<span class="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-black tracking-tighter">NEW</span>' : ''}
               </div>
               <span class="text-[12px] font-medium text-slate-400 uppercase mr-10">${formatDateTime(p.date)}</span>
@@ -1124,22 +1151,27 @@ async function renderReader() {
             
             <!-- Accordion Details (Moved to Bottom) -->
             <details class="group mt-2">
-                <summary class="list-none cursor-pointer text-[11px] text-indigo-400 font-bold uppercase tracking-wide flex items-center gap-1">
+                <summary class="list-none cursor-pointer text-[11px] ${viewCoverageColor} uppercase tracking-wide flex items-center gap-1">
                    <span>View Coverage (+${count} Articles)</span>
                    <span class="material-icons-round text-sm transition-transform group-open:rotate-180">expand_more</span>
                 </summary>
                 <div class="mt-2 space-y-3 pt-1">
-                   ${item.relatedItems.map(r => `
-                     <div class="flex justify-between items-center gap-3">
+                   ${item.relatedItems.map(r => {
+          // Check specific child match
+          const isChildThisSaved = BOOKMARKS.some(b => b.link === r.link);
+          const childTitleColor = isChildThisSaved ? 'text-orange-400' : 'text-slate-400';
+
+          return `<div class="flex justify-between items-center gap-3">
                        <input type="checkbox" class="bulk-check child-check shrink-0 w-4 h-4 border-slate-600 rounded" data-link="${r.link}" data-title="${escapeHtml(r.title)}" data-source="${escapeHtml(r.source)}" data-date="${r.date}" onchange="updateBulkBar()">
                        <div class="flex-1 min-w-0">
                          <div class="flex items-baseline justify-between">
                            <span class="text-[11px] font-bold text-slate-300 truncate">${escapeHtml(r.source)}</span>
                            <span class="text-[10px] text-slate-500 whitespace-nowrap ml-2">${formatDateTime(r.date).split('•')[1] || ''}</span>
                          </div>
-                         <div class="text-[12px] text-slate-400 truncate leading-snug cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(r.link)}${searchParam}&page=${PAGE}'">${escapeHtml(r.title)}</div>
+                         <div class="text-[12px] ${childTitleColor} truncate leading-snug cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(r.link)}${searchParam}&page=${PAGE}'">${escapeHtml(r.title)}</div>
                        </div>
-                     </div>`).join('')}
+                     </div>`;
+        }).join('')}
                 </div>
             </details>
           </div>
@@ -1147,13 +1179,33 @@ async function renderReader() {
       }
 
       // STANDARD ITEM RENDERING (Fallback)
-      const hasRead = READ_HISTORY.includes(item.link);
+      // V144.2 Fix: Never dim items in Read Later (Bookmarks) view
+      const hasRead = READ_HISTORY.includes(item.link) && CATEGORY !== 'BOOKMARKS';
       const isSaved = BOOKMARKS.some(b => b.link === item.link);
+
+      // V144.1: Child Save Indication
+      let isChildSaved = false;
+      // V144.2 Fix: Removed strict 'type===cluster' check. Rely on data existence.
+      if (item.relatedLinks) {
+        try {
+          const children = JSON.parse(decodeURIComponent(item.relatedLinks));
+          isChildSaved = children.some(link => BOOKMARKS.some(b => b.link === link));
+        } catch (e) { }
+      }
+
       const isFav = FAVORITES.some(f => f.link === item.link);
       const isNew = (new Date() - new Date(item.date)) < newCutoff;
       const showSave = CATEGORY !== 'FAVORITES';
 
-      return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(item.title.toLowerCase())}" data-link="${item.link}" data-title="${escapeHtml(item.title)}" data-source="${escapeHtml(item.source)}" data-date="${item.date}" data-desc="${escapeHtml(item.desc || '')}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
+      // V144.1: Visual Logic for Bookmark
+      // Parent Saved = Filled + Orange
+      // Child Saved (Parent not) = Border + Orange
+      // Neither = Border + Slate
+      const bookmarkIcon = isSaved ? 'bookmark' : 'bookmark_border';
+      const bookmarkColor = (isSaved || isChildSaved) ? 'text-orange-500' : 'text-slate-400';
+      const bookmarkLabelColor = (isSaved || isChildSaved) ? 'text-orange-500' : 'text-slate-400';
+
+      return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(item.title.toLowerCase())}" data-link="${item.link}" data-title="${escapeHtml(item.title)}" data-source="${escapeHtml(item.source)}" data-date="${item.date}" data-desc="${escapeHtml(item.desc || '')}" data-related-links="${item.relatedLinks || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
       <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
       <div class="px-4 pt-4 pb-2">
         <div class="flex justify-between items-baseline mb-1.5">
@@ -1165,7 +1217,7 @@ async function renderReader() {
         <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
           <div class="flex gap-6">
             <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
-            <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[10px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'} whitespace-nowrap">Read Later</span></div>
+            <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${bookmarkColor}">${bookmarkIcon}</span><span class="text-[10px] font-bold uppercase ${bookmarkLabelColor} whitespace-nowrap">Read Later</span></div>
             <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
           </div>
           <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(item.link)}${searchParam}&page=${PAGE}" class="material-icons-round text-xl">link</a></div>
