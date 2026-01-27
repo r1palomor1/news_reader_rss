@@ -14,4 +14,13 @@
    **NO GIT CHECKOUTS:**
    - Request approval first to Use `replace_file_content` to undo.
 
+4. **AVOID THESE PITFALLS ALWAYS:**
+   - **DON'T assume - trace the actual execution path** before coding solutions. Map complete data flow (what variables contain, what functions return, what gets saved) BEFORE writing new code.
+   
+   - **DON'T patch symptoms - debug root causes**. When bugs occur, ask "What is the actual value?" instead of immediately adding fixes. Stop and trace the data instead of building on broken assumptions.
+   
+   - **DON'T declare solutions without verification**. Never say "found it!" or "this is the bug" until systematically confirming each claim by reading the actual code. Methodically check every line before stating conclusions.
+
+   **Bottom line:** Prove understanding through verification, not assumption. Accuracy over speed.
+
 **PENALTY FOR VIOLATION:** IMMEDIATE STOP.
