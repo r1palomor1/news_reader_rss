@@ -37,11 +37,11 @@ if (!fm.fileExists(CACHE_DIR)) fm.createDirectory(CACHE_DIR)
 async function getJsonFile(path) {
   if (!fm.fileExists(path)) return []
   if (fm.isFileStoredIniCloud(path)) await fm.downloadFileFromiCloud(path)
-  try { 
-    return JSON.parse(fm.readString(path)) 
-  } catch (error) { 
+  try {
+    return JSON.parse(fm.readString(path))
+  } catch (error) {
     logToFile(`[JSON Parse Error] ${path}: ${error.message}`)
-    return [] 
+    return []
   }
 }
 
@@ -57,9 +57,9 @@ function saveTags(path, tags) {
   fm.writeString(path, tags.join("\n"))
 }
 
-function saveHistory(arr) { 
+function saveHistory(arr) {
   const trimmed = arr.slice(-MAX_HISTORY)  // Keep only most recent items
-  fm.writeString(HISTORY_FILE, JSON.stringify(trimmed)) 
+  fm.writeString(HISTORY_FILE, JSON.stringify(trimmed))
 }
 function saveBookmarks(arr) { fm.writeString(BOOKMARK_FILE, JSON.stringify(arr)) }
 function saveFavorites(arr) { fm.writeString(FAV_FILE, JSON.stringify(arr)) }
@@ -106,10 +106,10 @@ function logToFile(msg) {
   try {
     const timestamp = new Date().toLocaleTimeString();
     const entry = `[${timestamp}] ${msg}\n`;
-    
+
     let content = fm.fileExists(DEBUG_FILE) ? fm.readString(DEBUG_FILE) : "";
     content += entry;
-    
+
     // Rotate if exceeds max size
     if (content.length > MAX_LOG_SIZE) {
       // Keep last MAX_LOG_SIZE characters
@@ -120,9 +120,9 @@ function logToFile(msg) {
         content = content.substring(firstNewline + 1);
       }
     }
-    
+
     fm.writeString(DEBUG_FILE, content);
-  } catch (e) { 
+  } catch (e) {
     // Silent fail - logging shouldn't crash the app
   }
 }
@@ -295,13 +295,13 @@ async function syncAllFeeds() {
     </body></html>`
   await hud.loadHTML(hudHtml); hud.present(false)
   const results = await Promise.all(enabledFeeds.map(f => fetchSingleFeed(f.url, f.name)));
-  
+
   // Small delay to ensure all file writes complete
   await new Promise(resolve => Timer.schedule(100, false, resolve));
-  
+
   await generateMasterFeed()
   fm.writeString(VISIT_FILE, String(Date.now()))
-  
+
   // Show failure notification if any feeds failed
   const failures = results.filter(r => !r.success && !r.cached);
   if (failures.length > 0) {
@@ -577,11 +577,11 @@ if (args.queryParameters.bulkFavorite) {
   const items = JSON.parse(decodeURIComponent(args.queryParameters.bulkFavorite));
   let changed = false;
   items.forEach(item => {
-     const idx = FAVORITES.findIndex(f => f.link === item.link);
-     if (idx === -1) {
-        FAVORITES.push(item);
-        changed = true;
-     }
+    const idx = FAVORITES.findIndex(f => f.link === item.link);
+    if (idx === -1) {
+      FAVORITES.push(item);
+      changed = true;
+    }
   });
   if (changed) saveFavorites(FAVORITES);
   Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
@@ -947,7 +947,7 @@ async function renderReader() {
     // Avoids re-clustering on every view by caching clustered results
     const rawCachePath = fm.joinPath(CACHE_DIR, CATEGORY.replace(/[^a-z0-9]/gi, '_').toLowerCase() + ".json");
     const clusteredCachePath = fm.joinPath(CACHE_DIR, CATEGORY.replace(/[^a-z0-9]/gi, '_').toLowerCase() + "_clustered.json");
-    
+
     // Check if clustered cache is valid (newer than raw source)
     let useCache = false;
     if (fm.fileExists(clusteredCachePath) && fm.fileExists(rawCachePath)) {
@@ -955,14 +955,14 @@ async function renderReader() {
       const clusteredModTime = fm.modificationDate(clusteredCachePath).getTime();
       useCache = clusteredModTime > rawModTime; // Cache valid if newer than source
     }
-    
+
     if (useCache) {
       // FAST PATH: Load pre-clustered data from cache
       logToFile(`[Render] Using Cached Clustered Results for ${CATEGORY}`);
       // V139.4: Fixed missing await - getJsonFile is async
       const cached = await getJsonFile(clusteredCachePath);
       filteredPool = Array.isArray(cached) ? cached : [];
-      
+
       // Apply unread filter to already-clustered entities
       if (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") {
         filteredPool = filteredPool.filter(entity => {
@@ -978,11 +978,11 @@ async function renderReader() {
     } else {
       // SLOW PATH: Cluster from scratch and save to cache
       logToFile(`[Render] Clustering ${CATEGORY} and caching...`);
-      
+
       // Apply unread filter to raw articles before clustering (for display)
       let rawPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
       filteredPool = groupArticles(rawPool);
-      
+
       // Save FULL clustered dataset to cache (unfiltered for reusability)
       const fullClustered = groupArticles(CACHED_ITEMS);
       fm.writeString(clusteredCachePath, JSON.stringify(fullClustered));
@@ -1002,11 +1002,11 @@ async function renderReader() {
   // V119.5: Simple Layout (Requested)
   // 1. Title gets the %.
   // 2. Subtitle gets the count.
-  
+
   let headerTitle = CATEGORY === 'BOOKMARKS' ? 'READ LATER' : CATEGORY;
   let headerSubText = `${filteredPool.length} Items`; // Reset to simple
   let clusterHtml = '';
-  
+
   if (CATEGORY === "ALL SOURCES") {
     let totalArticles = 0;
     let clusteredArticles = 0;
@@ -1022,9 +1022,9 @@ async function renderReader() {
 
     if (totalArticles > 0) {
       const percent = Math.round((clusteredArticles / totalArticles) * 100);
-        clusterHtml = `<span class="text-[10px] text-slate-200 font-bold ml-1 opacity-90">(${percent}% Clustered)</span>`;
-      }
+      clusterHtml = `<span class="text-[10px] text-slate-200 font-bold ml-1 opacity-90">(${percent}% Clustered)</span>`;
     }
+  }
 
   let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>
   body { font-family: ui-sans-serif; background-color: #0f172a; color: #f1f5f9; -webkit-user-select: none; scroll-behavior: smooth; } 
@@ -1059,12 +1059,12 @@ async function renderReader() {
     </div>
     <div class="flex overflow-x-auto px-4 pb-3 gap-2 no-scrollbar" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
       ${pulseTagsList.map(([tag, count]) => {
-      const isHot = count >= heatThreshold;
-      return `<div onclick="setPulseSearch('${tag}')" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap">
+    const isHot = count >= heatThreshold;
+    return `<div onclick="setPulseSearch('${tag}')" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap">
           <span class="text-[11px] font-bold text-blue-400">${isHot ? '🔥 ' : ''}${tag}</span>
           <span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span>
         </div>`
-    }).join('')}
+  }).join('')}
     </div>
   </header>
 
@@ -1727,7 +1727,7 @@ async function validateUrl(url) {
 if (args.queryParameters.addFeed) {
   const newName = sanitizeInput(args.queryParameters.name, 100)
   const newUrl = args.queryParameters.url.trim()
-  
+
   // Basic URL validation
   if (!newName || !newUrl || !newUrl.match(/^https?:\/\/.+/i)) {
     const alert = new Alert()
@@ -1738,7 +1738,7 @@ if (args.queryParameters.addFeed) {
     Safari.open(`${scriptUrl}?state=MANAGER`)
     return
   }
-  
+
   let validation = await validateUrl(newUrl);
   if (validation.status === "green") {
     await fetchSingleFeed(newUrl, newName);
