@@ -16,7 +16,7 @@
 ## Priority 3: Performance Optimization (3-4 hours)
 - [x] 10. **Cache Clustered Results** - Single-source clustering cached, not recalculated ✅ V139.4
 - [x] 11. **Optimize DOM Queries** - ~~Cache `querySelectorAll` results~~ SKIPPED (minimal impact)
-- [ ] 12. **Debounce Search Input** - 300ms delay to reduce filterNews() calls
+- [x] 12. **Debounce Search Input** - 300ms delay to reduce filterNews() calls ✅ V140.0
 - [ ] 13. **Virtual Scrolling** - Only render visible cards for 1000+ feeds
 - [ ] 14. **Lazy Load Images** - Defer description image loading until scroll
 

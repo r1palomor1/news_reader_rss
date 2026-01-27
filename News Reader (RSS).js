@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V140.0
-// Status: Search Debounce - Performance Optimization
+// Version: V140.1
+// Status: Search Debounce - Fixed immediate UI feedback separation
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -1288,17 +1288,21 @@ async function renderReader() {
     window.location.href = '${scriptUrl}?' + type + '=' + encodeURIComponent(card.dataset.link) + '&' + params + extra; 
   }
   
-  // V140.0: Debounce search input to reduce DOM filtering during typing
+  // V140.1: Debounce search input - immediate UI feedback, delayed filtering
   let searchDebounceTimer = null;
   function debouncedFilter() {
+    // Immediate feedback: show/hide clear button
+    const query = document.getElementById('searchInput').value.toLowerCase().trim();
+    const clearBtn = document.getElementById('clearSearch');
+    if (query) { clearBtn.classList.remove('hidden'); } else { clearBtn.classList.add('hidden'); }
+    
+    // Debounced: actual card filtering after 300ms
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(filterNews, 300);
   }
   
   function filterNews() {
     const query = document.getElementById('searchInput').value.toLowerCase().trim();
-    const clearBtn = document.getElementById('clearSearch');
-    if (query) { clearBtn.classList.remove('hidden'); } else { clearBtn.classList.add('hidden'); }
     const cards = document.querySelectorAll('.news-card');
     const pagControls = document.getElementById('paginationControls');
     const headerSub = document.getElementById('headerSub');
