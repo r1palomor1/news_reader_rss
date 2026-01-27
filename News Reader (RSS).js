@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V142.0
-// Status: Refactor - Consolidated Tag Handlers (Task 18)
+// Version: V143.2
+// Status: Refactor - Bulk Logic Fix (Read Later Undimmed)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -1365,101 +1365,89 @@ async function renderReader() {
   }
 
   function updateBulkBar() { const checked = document.querySelectorAll('.bulk-check:checked'); const bar = document.getElementById('bulkBar'); if (checked.length > 0) { bar.classList.remove('hidden'); bar.classList.add('flex'); } else { bar.classList.add('hidden'); bar.classList.remove('flex'); } }
-  function playAll() {
-    let playUrls = [];
-    let readUrls = [];
-    const checked = document.querySelectorAll('.bulk-check:checked');
-    const pool = checked.length > 0 ? Array.from(checked) : Array.from(document.querySelectorAll('.news-card:not(.hidden-card) .bulk-check.parent-check'));
-    
-    pool.forEach(cb => {
-      // V118.3: Handle Child Checkboxes (Use specific data) or Parent (Use Card data)
-      const isChild = cb.classList.contains('child-check');
-      const card = cb.closest('.news-card');
-      
-      const link = isChild ? cb.dataset.link : card.dataset.link;
-      
-      playUrls.push(link);
-      readUrls.push(link);
-      
-      // LOGIC: If Acting on Child, Only mark CHILD read.
-      // If Acting on Parent, NUKE THE CLUSTER (Old Behavior).
-      const related = card.dataset.relatedLinks;
-      if (!isChild && related) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
-      
-      // Also ensure Parent is marked if we clicked a child (Wait, NO. V120.0 Change: Do NOT mark parent if child clicked)
-      // if (isChild) readUrls.push(card.dataset.link); <-- REMOVED
-    });
-    
-    if (playUrls.length === 0) return;
-    
-    const playString = encodeURIComponent(playUrls.join(','));
-    const readString = encodeURIComponent(JSON.stringify(readUrls));
-    window.location.href = '${scriptUrl}?playall=true&urls=' + playString + '&readLinks=' + readString + '&page=${PAGE}';
-  }
-  function bulkRead() { 
+  
+  // V143.0 Refactor: Consolidated Bulk Logic
+  function collectBulkSelection() {
     const checked = Array.from(document.querySelectorAll('.bulk-check:checked'));
-    let links = [];
-    checked.forEach(cb => {
-      const isChild = cb.classList.contains('child-check');
-      const card = cb.closest('.news-card');
-      const link = isChild ? cb.dataset.link : card.dataset.link;
-      
-      links.push(link);
-      
-      // Cluster Nuke Logic: Only if PARENT selected
-      const related = card.dataset.relatedLinks;
-      if (!isChild && related) try { links = links.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
-      // if (isChild) links.push(card.dataset.link); <-- REMOVED
-    });
-    const search = encodeURIComponent(document.getElementById('searchInput').value); 
-    window.location.href = '${scriptUrl}?bulkRead=' + encodeURIComponent(JSON.stringify(links)) + '&search=' + search + '&page=${PAGE}'; 
-  }
-  function bulkPlay() { playAll(); }
-  function bulkBookmark() { 
-    const checked = Array.from(document.querySelectorAll('.bulk-check:checked'));
-    let bookmarkItems = [];
-    let readUrls = [];
+    if (checked.length === 0) return [];
+
+    let items = [];
     checked.forEach(cb => {
       const isChild = cb.classList.contains('child-check');
       const card = cb.closest('.news-card');
       const d = isChild ? cb.dataset : card.dataset;
       
-      // Save specific item
-      bookmarkItems.push({ title: d.title, link: d.link, source: d.source, date: d.date, desc: '' });
-      
-      // Cluster Nuke: Mark REST as read (Only if Parent)
-      const related = card.dataset.relatedLinks;
-      if (!isChild && related) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(related))); } catch(e) {}
-      // if (isChild) readUrls.push(card.dataset.link); <-- REMOVED
+      // Add the explicitly selected item
+      items.push({
+        link: d.link,
+        title: d.title,
+        source: d.source,
+        date: d.date,
+        isChild: isChild,
+        relatedLinks: !isChild && card.dataset.relatedLinks ? card.dataset.relatedLinks : null
+      });
     });
+    return items;
+  }
+
+  function playAll() {
+    const items = collectBulkSelection();
+    if (items.length === 0) {
+      // Fallback: If nothing checked, try to play all visible (legacy behavior)
+      const visibleParents = Array.from(document.querySelectorAll('.news-card:not(.hidden-card) .bulk-check.parent-check'));
+      visibleParents.forEach(cb => {
+        const card = cb.closest('.news-card');
+        items.push({ link: card.dataset.link, relatedLinks: card.dataset.relatedLinks });
+      });
+    }
+    if (items.length === 0) return;
+
+    let playUrls = [], readUrls = [];
+    items.forEach(item => {
+      playUrls.push(item.link);
+      readUrls.push(item.link);
+      // Nuke Cluster Logic: If Parent, mark related read too
+      if (item.relatedLinks) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(item.relatedLinks))); } catch(e) {}
+    });
+
+    const playString = encodeURIComponent(playUrls.join(','));
+    const readString = encodeURIComponent(JSON.stringify(readUrls));
+    window.location.href = '${scriptUrl}?playall=true&urls=' + playString + '&readLinks=' + readString + '&page=${PAGE}';
+  }
+
+  function bulkRead() { 
+    const items = collectBulkSelection();
+    let links = [];
+    items.forEach(item => {
+      links.push(item.link);
+      if (item.relatedLinks) try { links = links.concat(JSON.parse(decodeURIComponent(item.relatedLinks))); } catch(e) {}
+    });
+    const search = encodeURIComponent(document.getElementById('searchInput').value); 
+    window.location.href = '${scriptUrl}?bulkRead=' + encodeURIComponent(JSON.stringify(links)) + '&search=' + search + '&page=${PAGE}'; 
+  }
+
+  function bulkBookmark() { 
+    const items = collectBulkSelection();
+    let bookmarkItems = [], readUrls = [];
+    
+    items.forEach(item => {
+      bookmarkItems.push({ title: item.title, link: item.link, source: item.source, date: item.date, desc: '' });
+      
+      // V143.2 FIX: Do NOT mark main item as read. Keeps it Undimmed in Read Later.
+      // readUrls.push(item.link); <--- REMOVED
+      
+      // If Parent, also mark cluster children as read
+      if (item.relatedLinks) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(item.relatedLinks))); } catch(e) {}
+    });
+    
     window.location.href = '${scriptUrl}?bulkBookmark=' + encodeURIComponent(JSON.stringify(bookmarkItems)) + '&readLinks=' + encodeURIComponent(JSON.stringify(readUrls)) + '&page=${PAGE}'; 
   }
+
   function bulkFav() { 
-    const checked = Array.from(document.querySelectorAll('.bulk-check:checked'));
-    if (checked.length === 0) return;
-    let favItem = null;
-    // For Fav, typically we only fav specific items. Does not have bulk processing in same way.
-    // NOTE: Logic supports multiple, but typically user Favs one.
-    // For simplicity, we loop.
-    checked.forEach(cb => {
-       const isChild = cb.classList.contains('child-check');
-       const card = cb.closest('.news-card');
-       const d = isChild ? cb.dataset : card.dataset;
-       // Trigger individual fav URL - wait, we can't do multiple redirects. 
-       // Needs Bulk Fav Handler logic or simplified "Fav Last".
-       // Let's implement actual Bulk Fav Handler later if needed, for now reuse single favorite param?
-       // No, we need a bulk param.
-    });
-    // REVISION: We need a bulkFavorite param in main script to handle array.
-    // Since we don't have it yet, let's just loop sequentially with small delay? No.
-    // Let's create a bulk param structure now.
-    let favs = [];
-    checked.forEach(cb => {
-       const isChild = cb.classList.contains('child-check');
-       const card = cb.closest('.news-card');
-       const d = isChild ? cb.dataset : card.dataset;
-       favs.push({ title: d.title, link: d.link, source: d.source, date: d.date, desc: '' });
-    });
+    const items = collectBulkSelection();
+    if (items.length === 0) return;
+    
+    let favs = items.map(item => ({ title: item.title, link: item.link, source: item.source, date: item.date, desc: '' }));
     window.location.href = '${scriptUrl}?bulkFavorite=' + encodeURIComponent(JSON.stringify(favs)) + '&page=${PAGE}';
   }
   function clearSelection() { document.querySelectorAll('.bulk-check').forEach(cb => cb.checked = false); updateBulkBar(); }
