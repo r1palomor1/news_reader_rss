@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V144.3
-// Status: Refactor - Child Indication & Read Later Forced-Bright
+// Version: V144.4
+// Status: Refactor - Fix Empty Bookmarks Return
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -531,7 +531,10 @@ if (args.queryParameters.listen) {
   const bIdx = BOOKMARKS.findIndex(b => b.link === url)
   if (bIdx > -1) {
     BOOKMARKS.splice(bIdx, 1); saveBookmarks(BOOKMARKS);
-    if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
+    if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") {
+      const prev = fm.fileExists(PREV_CAT_FILE) ? fm.readString(PREV_CAT_FILE) : getFirstTrueSource();
+      fm.writeString(CAT_FILE, prev)
+    }
   }
 
   // Handling History - Add if not already read
@@ -571,7 +574,10 @@ if (args.queryParameters.bookmark) {
   // const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : [] 
   if (idx > -1) {
     BOOKMARKS.splice(idx, 1)
-    if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") fm.writeString(CAT_FILE, getFirstTrueSource())
+    if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") {
+      const prev = fm.fileExists(PREV_CAT_FILE) ? fm.readString(PREV_CAT_FILE) : getFirstTrueSource();
+      fm.writeString(CAT_FILE, prev)
+    }
   } else {
     BOOKMARKS.push({ title: args.queryParameters.title, link: bLink, source: args.queryParameters.source, date: args.queryParameters.date, desc: args.queryParameters.desc })
     // readLinks.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) }); <--- REMOVED
