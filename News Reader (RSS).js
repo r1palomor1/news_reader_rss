@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V145.5
-// Status: Fix Bulk Listen Button
+// Version: V147.0
+// Status: [IN PROGRESS] AI Summary Integration Integration - Shortcut Debugging
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -550,7 +550,8 @@ if (args.queryParameters.playall) {
   // The 'Read Article' shortcut receives the comma-separated list of URLs.
   // x-success callback ensures we return to the specific page and search state.
   const completionState = encodeURIComponent(`${scriptUrl}?page=${PAGE}`)
-  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(urls)}&x-success=${completionState}`)
+  const shortcutName = args.queryParameters.shortcutName || 'Read Article';
+  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=${encodeURIComponent(shortcutName)}&input=${encodeURIComponent(urls)}&x-success=${completionState}`)
   return
 }
 
@@ -582,6 +583,37 @@ if (args.queryParameters.listen) {
   const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
   const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
   Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
+  return;
+}
+
+if (args.queryParameters.summarize) {
+  const url = args.queryParameters.summarize
+
+  // Handling Read Later (Bookmarks) - Always remove after listening
+  const bIdx = BOOKMARKS.findIndex(b => b.link === url)
+  if (bIdx > -1) {
+    BOOKMARKS.splice(bIdx, 1); saveBookmarks(BOOKMARKS);
+    if (BOOKMARKS.length === 0 && CATEGORY === "BOOKMARKS") {
+      const prev = fm.fileExists(PREV_CAT_FILE) ? fm.readString(PREV_CAT_FILE) : getFirstTrueSource();
+      fm.writeString(CAT_FILE, prev)
+    }
+  }
+
+  // Handling History - Add if not already read
+  const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : [url];
+  readLinks.forEach(link => {
+    const isFav = FAVORITES.some(f => f.link === link);
+    if (!isFav && !READ_HISTORY.includes(link)) {
+      READ_HISTORY.push(link);
+    }
+  });
+  saveHistory(READ_HISTORY)
+
+  // Trigger Dedicated "Summarize Article" Shortcut
+  // Note: We no longer need the SUMMARIZE: prefix because we are calling a specific shortcut
+  const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
+  const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
+  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
   return;
 }
 
@@ -1205,6 +1237,7 @@ async function renderReader() {
             <div class="flex items-center justify-between pb-3 mt-3 border-b border-slate-700/50">
               <div class="flex gap-6">
                 <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
+                <div onclick="event.stopPropagation(); executeAction(this, 'summarize')" class="flex items-center gap-1.5"><span class="material-icons-round text-base text-slate-400">auto_awesome</span><span class="text-[12px] font-bold uppercase text-slate-400">AI</span></div>
                 <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[10px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'} whitespace-nowrap">Read Later</span></div>
                 <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
               </div>
@@ -1274,6 +1307,7 @@ async function renderReader() {
         <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
           <div class="flex gap-6">
             <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
+            <div onclick="event.stopPropagation(); executeAction(this, 'summarize')" class="flex items-center gap-1.5"><span class="material-icons-round text-base text-slate-400">auto_awesome</span><span class="text-[12px] font-bold uppercase text-slate-400">AI</span></div>
             <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${bookmarkColor}">${bookmarkIcon}</span><span class="text-[10px] font-bold uppercase ${bookmarkLabelColor} whitespace-nowrap">Read Later</span></div>
             <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
           </div>
@@ -1363,15 +1397,14 @@ async function renderReader() {
   <div id="floatDown" onclick="window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'})" class="fixed bottom-6 right-6 glass border border-slate-700 rounded-full p-3 shadow-xl z-40 hidden transition-all duration-300 hover:bg-slate-800">
     <span class="material-icons-round text-blue-400 text-2xl">arrow_downward</span>
   </div>
-  <div id="bulkBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass border border-slate-700 rounded-full px-6 py-3 hidden flex items-center gap-8 shadow-2xl z-50">
-     <button onclick="playAll()" class="flex flex-col items-center"><span class="material-icons-round text-blue-500">volume_up</span><span class="text-[9px] uppercase font-bold text-blue-500">Listen</span></button>
-     <button onclick="bulkBookmark()" class="flex flex-col items-center"><span class="material-icons-round text-orange-500">bookmark</span><span class="text-[9px] uppercase font-bold text-orange-500">Save</span></button>
-     <button onclick="bulkRead()" class="flex flex-col items-center"><span class="material-icons-round text-green-500">check_circle</span><span class="text-[9px] uppercase font-bold text-green-500">Read</span></button>
-     <div class="h-6 w-[1px] bg-slate-700"></div>
-     <button onclick="bulkFav()" class="flex flex-col items-center"><span class="material-icons-round text-yellow-500">star</span><span class="text-[9px] uppercase font-bold text-yellow-500">Fav</span></button>
-     <div class="h-6 w-[1px] bg-slate-700"></div>
-     <button onclick="clearSelection()" class="material-icons-round text-slate-400">close</button>
-  </div>
+   <div id="bulkBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass border border-slate-700 rounded-full px-6 py-3 hidden flex items-center gap-6 shadow-2xl z-50">
+      <button onclick="playAll()" class="flex flex-col items-center"><span class="material-icons-round text-blue-500">volume_up</span><span class="text-[9px] uppercase font-bold text-blue-500">Listen</span></button>
+      <button onclick="bulkSummarize()" class="flex flex-col items-center"><span class="material-icons-round text-purple-400">auto_awesome</span><span class="text-[9px] uppercase font-bold text-purple-400">AI</span></button>
+      <button onclick="bulkBookmark()" class="flex flex-col items-center"><span class="material-icons-round text-orange-500">bookmark</span><span class="text-[9px] uppercase font-bold text-orange-500">Save</span></button>
+      <button onclick="bulkRead()" class="flex flex-col items-center"><span class="material-icons-round text-green-500">check_circle</span><span class="text-[9px] uppercase font-bold text-green-500">Read</span></button>
+      <button onclick="bulkFav()" class="flex flex-col items-center"><span class="material-icons-round text-yellow-500">star</span><span class="text-[9px] uppercase font-bold text-yellow-500">Fav</span></button>
+      <button onclick="clearSelection()" class="material-icons-round text-slate-400">close</button>
+   </div>
 <script>
   let xDown = null, yDown = null;
   const START_IDX = ${startIdx}; const BASE_TOTAL = ${totalCount}; const CLUSTER_HTML = \`${clusterHtml}\`;
@@ -1391,7 +1424,7 @@ async function renderReader() {
     const card = el.closest('.news-card'); 
     const search = encodeURIComponent(document.getElementById('searchInput').value); 
     let extra = '';
-    if ((type === 'listen' || type === 'bookmark') && card.dataset.relatedLinks) {
+    if ((type === 'listen' || type === 'bookmark' || type === 'summarize') && card.dataset.relatedLinks) {
        extra = '&readLinks=' + card.dataset.relatedLinks;
     }
     const params = 'search=' + search + '&page=${PAGE}&title=' + encodeURIComponent(card.dataset.title) + '&source=' + encodeURIComponent(card.dataset.source) + '&date=' + encodeURIComponent(card.dataset.date) + '&desc=' + encodeURIComponent(card.dataset.desc); 
@@ -1522,6 +1555,30 @@ async function renderReader() {
     const playString = encodeURIComponent(playUrls.join(','));
     const readString = encodeURIComponent(JSON.stringify(readUrls));
     window.location.href = '${scriptUrl}?playall=true&urls=' + playString + '&readLinks=' + readString + '&page=${PAGE}';
+  }
+
+  function bulkSummarize() {
+    const items = collectBulkSelection();
+    if (items.length === 0) return;
+    
+    // For summary, we only take the first 5 items to prevent insane token usage/timeouts
+    const targetItems = items.slice(0, 5);
+    const urls = targetItems.map(i => i.link).join(',');
+    
+    // We treat bulk summary as "Summarize First, then maybe queue others" 
+    // But currently shortcuts only handles one input usually. 
+    // Let's pass comma-separated URLs prefixed with SUMMARIZE:
+    
+    // Mark as read
+    let readUrls = [];
+    items.forEach(item => {
+      readUrls.push(item.link);
+      if (item.relatedLinks) try { readUrls = readUrls.concat(JSON.parse(decodeURIComponent(item.relatedLinks))); } catch(e) {}
+    });
+    
+    const readString = encodeURIComponent(JSON.stringify(readUrls));
+    // Pass comma-separated URLs to "Summarize Article" shortcut
+    window.location.href = '${scriptUrl}?playall=true&urls=' + encodeURIComponent(urls) + '&readLinks=' + readString + '&page=${PAGE}&shortcutName=Summarize%20Article';
   }
 
   function bulkRead() { 
