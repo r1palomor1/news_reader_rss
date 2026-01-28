@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V145.5
-// Status: Fix Bulk Listen Button
+// Version: V144.4
+// Status: Refactor - Fix Empty Bookmarks Return
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -524,36 +524,6 @@ if (args.queryParameters.showLogs) {
   return;
 }
 
-
-
-if (args.queryParameters.playall) {
-  const urls = decodeURIComponent(args.queryParameters.urls)
-
-  // Logic Update: Mark associated items (parents & descendants) as read
-  if (args.queryParameters.readLinks) {
-    try {
-      const readToMark = JSON.parse(decodeURIComponent(args.queryParameters.readLinks))
-      let historyUpdated = false
-      readToMark.forEach(link => {
-        if (!READ_HISTORY.includes(link)) {
-          READ_HISTORY.push(link)
-          historyUpdated = true
-        }
-      })
-      if (historyUpdated) saveHistory(READ_HISTORY)
-    } catch (e) {
-      logToFile('[Error] Failed to parse bulk read links during playall: ' + e.message)
-    }
-  }
-
-  // Logic Update: Hand off to iOS Shortcuts
-  // The 'Read Article' shortcut receives the comma-separated list of URLs.
-  // x-success callback ensures we return to the specific page and search state.
-  const completionState = encodeURIComponent(`${scriptUrl}?page=${PAGE}`)
-  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(urls)}&x-success=${completionState}`)
-  return
-}
-
 if (args.queryParameters.listen) {
   const url = args.queryParameters.listen
 
@@ -880,74 +850,6 @@ function groupArticles(items) {
   return clusters;
 }
 
-// Helper: Render Header (V145.0 Retry)
-async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, headerTitle, headerSubText, showUnreadOnly, pulseTagsList, heatThreshold, category, queryParams) {
-  // Pulse Pills HTML Generation
-  const pulseHtml = pulseTagsList.map(([tag, count]) => {
-    const isHot = count >= heatThreshold;
-    return `<div onclick="setPulseSearch('${tag}')" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap">
-          <span class="text-[11px] font-bold text-blue-400">${isHot ? '🔥 ' : ''}${tag}</span>
-          <span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span>
-        </div>`;
-  }).join('');
-
-  // Action Menu "Return" Button Logic
-  let returnBtnHtml = '';
-  if (category === 'BOOKMARKS' || category === 'FAVORITES') {
-    const p = queryParams.prevCat;
-    const validP = (p && p !== "FAVORITES" && p !== "BOOKMARKS" && p !== "READ LATER") ? p : returnSource;
-    returnBtnHtml = `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(validP)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>`;
-  }
-
-  return `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>
-  body { font-family: ui-sans-serif; background-color: #0f172a; color: #f1f5f9; -webkit-user-select: none; scroll-behavior: smooth; } 
-  .glass { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); background: rgba(15, 23, 42, 0.85); border-bottom: 1px solid #1e293b; } 
-  .hidden-card { display: none !important; }
-  .highlight-card { border: 1.5px solid #3b82f6 !important; box-shadow: 0 0 12px rgba(59, 130, 246, 0.15); }
-  .pulse-pill { scroll-snap-align: start; flex-shrink: 0; }
-  .bulk-check { -webkit-appearance: none; width: 22px; height: 22px; border: 1.5px solid #475569; border-radius: 6px; position: relative; }
-  .bulk-check:checked { background-color: #2563eb; border-color: #2563eb; }
-  .bulk-check:checked::after { content: 'check'; font-family: 'Material Icons Round'; position: absolute; color: white; font-size: 16px; top: 50%; left: 50%; transform: translate(-50%, -50%); }
-  #actionMenu { display: none; position: fixed; top: 55px; right: 20px; width: 200px; border-radius: 12px; overflow: hidden; z-index: 1000; box-shadow: 0 10px 25px rgba(0,0,0,0.2); border: 1px solid #334155; background: #1e293b; }
-  .menu-item { padding: 12px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; font-size: 14px; font-weight: 500; border-bottom: 1px solid #334155; }
-</style></head>
-<body class="pb-32">
-  <header class="fixed top-0 left-0 right-0 z-40 glass">
-    <div class="px-5 pt-3 pb-2 flex justify-between items-center">
-      <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${page}&prevCat=' + encodeURIComponent('${returnSource}')">
-        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${headerTitle} ▼</h1>
-        <span id="headerSub" class="text-[12px] uppercase font-medium ${showUnreadOnly ? 'text-blue-400' : 'text-red-500 font-bold'}">${headerSubText}</span>
-      </div>
-      <div class="flex gap-4 items-center">
-        <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
-        <button onclick="toggleMenu(event)" class="p-1"><span class="material-icons-round ${showUnreadOnly ? 'text-slate-500' : 'text-red-500'}">more_vert</span></button>
-      </div>
-    </div>
-    <div class="px-4 pb-2 relative">
-      <div class="relative flex items-center">
-        <span class="material-icons-round absolute left-3 text-slate-500 text-sm">search</span>
-        <input type="search" id="searchInput" oninput="debouncedFilter()" value="${searchTerm}" placeholder="Search for topics or -exclude keywords" class="w-full bg-slate-900/50 border border-slate-700 rounded-lg py-2 pl-10 pr-10 text-[15px] focus:outline-none focus:border-blue-500 text-slate-100">
-        <span id="clearSearch" onclick="clearSearchBar()" class="material-icons-round absolute right-3 text-slate-400 text-sm cursor-pointer ${searchTerm ? '' : 'hidden'}">close</span>
-      </div>
-    </div>
-    <div class="flex overflow-x-auto px-4 pb-3 gap-2 no-scrollbar" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
-      ${pulseHtml}
-    </div>
-  </header>
-
-  <div id="actionMenu">
-    ${returnBtnHtml}
-    <div onclick="window.location.href='${scriptUrl}?cat=FAVORITES&prevCat=${encodeURIComponent(category)}&prevPage=${page}'" class="menu-item"><span class="material-icons-round text-yellow-400">star</span><span>Favorites</span></div>
-    <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevCat=${encodeURIComponent(category)}&prevPage=${page}'" class="menu-item"><span class="material-icons-round text-orange-500">bookmark</span><span>Read Later</span></div>
-    <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${page}&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${showUnreadOnly ? 'Show All' : 'Unread Only'}</span></div>
-    <div onclick="openTagEditor()" class="menu-item"><span class="material-icons-round text-green-400">label</span><span>Tag Editor</span></div>
-    <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
-    <div onclick="window.location.href='${scriptUrl}?showLogs=true&page=${page}&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-slate-500">bug_report</span><span>Debug Logs</span></div>
-    <div onclick="window.location.href='${scriptUrl}?refresh=true&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-slate-400">refresh</span><span>Refresh All</span></div>
-  </div>`;
-
-}
-
 async function renderReader() {
   const lastVisit = fm.fileExists(VISIT_FILE) ? parseInt(fm.readString(VISIT_FILE)) : 0
   const isStale = (Date.now() - lastVisit) > (10 * 60 * 1000)
@@ -1151,46 +1053,88 @@ async function renderReader() {
     }
   }
 
-  let html = await renderReaderHeader(scriptUrl, PAGE, SEARCH_TERM, returnSource, headerTitle, headerSubText, SHOW_UNREAD_ONLY, pulseTagsList, heatThreshold, CATEGORY, args.queryParameters);
+  let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>
+  body { font-family: ui-sans-serif; background-color: #0f172a; color: #f1f5f9; -webkit-user-select: none; scroll-behavior: smooth; } 
+  .glass { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); background: rgba(15, 23, 42, 0.85); border-bottom: 1px solid #1e293b; } 
+  .hidden-card { display: none !important; }
+  .highlight-card { border: 1.5px solid #3b82f6 !important; box-shadow: 0 0 12px rgba(59, 130, 246, 0.15); }
+  .pulse-pill { scroll-snap-align: start; flex-shrink: 0; }
+  .bulk-check { -webkit-appearance: none; width: 22px; height: 22px; border: 1.5px solid #475569; border-radius: 6px; position: relative; }
+  .bulk-check:checked { background-color: #2563eb; border-color: #2563eb; }
+  .bulk-check:checked::after { content: 'check'; font-family: 'Material Icons Round'; position: absolute; color: white; font-size: 16px; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+  #actionMenu { display: none; position: fixed; top: 55px; right: 20px; width: 200px; border-radius: 12px; overflow: hidden; z-index: 1000; box-shadow: 0 10px 25px rgba(0,0,0,0.2); border: 1px solid #334155; background: #1e293b; }
+  .menu-item { padding: 12px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; font-size: 14px; font-weight: 500; border-bottom: 1px solid #334155; }
+</style></head>
+<body class="pb-32">
+  <header class="fixed top-0 left-0 right-0 z-40 glass">
+    <div class="px-5 pt-3 pb-2 flex justify-between items-center">
+      <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')">
+        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${headerTitle} ▼</h1>
+        <span id="headerSub" class="text-[12px] uppercase font-medium ${SHOW_UNREAD_ONLY ? 'text-blue-400' : 'text-red-500 font-bold'}">${headerSubText}</span>
+      </div>
+      <div class="flex gap-4 items-center">
+        <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
+        <button onclick="toggleMenu(event)" class="p-1"><span class="material-icons-round ${SHOW_UNREAD_ONLY ? 'text-slate-500' : 'text-red-500'}">more_vert</span></button>
+      </div>
+    </div>
+    <div class="px-4 pb-2 relative">
+      <div class="relative flex items-center">
+        <span class="material-icons-round absolute left-3 text-slate-500 text-sm">search</span>
+        <input type="search" id="searchInput" oninput="debouncedFilter()" value="${SEARCH_TERM}" placeholder="Search for topics or -exclude keywords" class="w-full bg-slate-900/50 border border-slate-700 rounded-lg py-2 pl-10 pr-10 text-[15px] focus:outline-none focus:border-blue-500 text-slate-100">
+        <span id="clearSearch" onclick="clearSearchBar()" class="material-icons-round absolute right-3 text-slate-400 text-sm cursor-pointer ${SEARCH_TERM ? '' : 'hidden'}">close</span>
+      </div>
+    </div>
+    <div class="flex overflow-x-auto px-4 pb-3 gap-2 no-scrollbar" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
+      ${pulseTagsList.map(([tag, count]) => {
+    const isHot = count >= heatThreshold;
+    return `<div onclick="setPulseSearch('${tag}')" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap">
+          <span class="text-[11px] font-bold text-blue-400">${isHot ? '🔥 ' : ''}${tag}</span>
+          <span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span>
+        </div>`
+  }).join('')}
+    </div>
+  </header>
 
-  html += `<main id="newsContainer" class="pt-44 px-4 space-y-3">
+  <div id="actionMenu">
+    ${(CATEGORY === 'BOOKMARKS' || CATEGORY === 'FAVORITES') ? (() => {
+      const p = args.queryParameters.prevCat;
+      const validP = (p && p !== "FAVORITES" && p !== "BOOKMARKS" && p !== "READ LATER") ? p : returnSource;
+      return `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(validP)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>`;
+    })() : ''}
+    <div onclick="window.location.href='${scriptUrl}?cat=FAVORITES&prevCat=${encodeURIComponent(CATEGORY)}&prevPage=${PAGE}'" class="menu-item"><span class="material-icons-round text-yellow-400">star</span><span>Favorites</span></div>
+    <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevCat=${encodeURIComponent(CATEGORY)}&prevPage=${PAGE}'" class="menu-item"><span class="material-icons-round text-orange-500">bookmark</span><span>Read Later</span></div>
+    <div onclick="window.location.href='${scriptUrl}?toggleUnread=true&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-blue-500">visibility</span><span>${SHOW_UNREAD_ONLY ? 'Show All' : 'Unread Only'}</span></div>
+    <div onclick="openTagEditor()" class="menu-item"><span class="material-icons-round text-green-400">label</span><span>Tag Editor</span></div>
+    <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
+    <div onclick="window.location.href='${scriptUrl}?showLogs=true&page=${PAGE}&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-slate-500">bug_report</span><span>Debug Logs</span></div>
+    <div onclick="window.location.href='${scriptUrl}?refresh=true&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-slate-400">refresh</span><span>Refresh All</span></div>
+  </div>
 
-
+  <main id="newsContainer" class="pt-44 px-4 space-y-3">
   ${filteredPool.map((item, idx) => {
-    // Headers removed for Split Source UI 
-    const header = '';
+      // Headers removed for Split Source UI
+      const header = '';
 
-    // V145.2 Fix: Filter children BEFORE deciding card type
-    let validChildren = [];
-    if (item.type === 'cluster') {
-      const raw = item.relatedItems || [];
-      if (SHOW_UNREAD_ONLY && CATEGORY !== 'BOOKMARKS') {
-        validChildren = raw.filter(r => !READ_HISTORY.includes(r.link));
-      } else {
-        validChildren = raw;
-      }
-    }
+      if (item.type === 'cluster') {
+        // CLUSTER CARD RENDERING
+        const p = item.primaryItem;
+        const count = item.relatedItems.length;
+        // V144.2 Fix: Never dim items in Read Later (Bookmarks) view
+        const hasRead = READ_HISTORY.includes(p.link) && CATEGORY !== 'BOOKMARKS';
+        const isSaved = BOOKMARKS.some(b => b.link === p.link);
+        const isFav = FAVORITES.some(f => f.link === p.link);
+        const isNew = (new Date() - new Date(p.date)) < newCutoff;
 
-    if (item.type === 'cluster' && validChildren.length > 0) {
-      // CLUSTER CARD RENDERING
-      const p = item.primaryItem;
-      const count = validChildren.length;
-      // V144.2 Fix: Never dim items in Read Later (Bookmarks) view
-      const hasRead = READ_HISTORY.includes(p.link) && CATEGORY !== 'BOOKMARKS';
-      const isSaved = BOOKMARKS.some(b => b.link === p.link);
-      const isFav = FAVORITES.some(f => f.link === p.link);
-      const isNew = (new Date() - new Date(p.date)) < newCutoff;
+        // V144.3: Child Save Indication (Correct Block)
+        const isChildSaved = item.relatedItems.some(r => BOOKMARKS.some(b => b.link === r.link));
+        const viewCoverageColor = isChildSaved ? 'text-orange-500 font-bold' : 'text-indigo-400';
 
-      // V144.3: Child Save Indication (Correct Block)
-      const isChildSaved = validChildren.some(r => BOOKMARKS.some(b => b.link === r.link));
-      const viewCoverageColor = isChildSaved ? 'text-orange-500 font-bold' : 'text-indigo-400';
+        // Aggregate Sources
+        const sources = [p.source, ...item.relatedItems.map(r => r.source)];
+        const uniqueSources = [...new Set(sources)];
+        const sourceLabel = uniqueSources.length > 1 ? `${uniqueSources.length} SOURCES` : p.source;
 
-      // Aggregate Sources (Use validChildren)
-      const sources = [p.source, ...validChildren.map(r => r.source)];
-      const uniqueSources = [...new Set(sources)];
-      const sourceLabel = uniqueSources.length > 1 ? `${uniqueSources.length} SOURCES` : p.source;
-
-      return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-indigo-500/80 shadow-lg transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(p.title.toLowerCase())}" data-link="${p.link}" data-title="${escapeHtml(p.title)}" data-source="${escapeHtml(p.source)}" data-date="${p.date}" data-desc="${escapeHtml(p.desc || '')}" data-related-links="${encodeURIComponent(JSON.stringify(validChildren.map(r => r.link)))}" data-related-items="${encodeURIComponent(JSON.stringify(validChildren))}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
+        return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-indigo-500/80 shadow-lg transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(p.title.toLowerCase())}" data-link="${p.link}" data-title="${escapeHtml(p.title)}" data-source="${escapeHtml(p.source)}" data-date="${p.date}" data-desc="${escapeHtml(p.desc || '')}" data-related-links="${encodeURIComponent(JSON.stringify(item.relatedItems.map(r => r.link)))}" data-related-items="${encodeURIComponent(JSON.stringify(item.relatedItems))}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
           <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
           <div class="px-4 pt-4 pb-2">
             <div class="flex justify-between items-baseline mb-1.5">
@@ -1218,12 +1162,12 @@ async function renderReader() {
                    <span class="material-icons-round text-sm transition-transform group-open:rotate-180">expand_more</span>
                 </summary>
                 <div class="mt-2 space-y-3 pt-1">
-                   ${validChildren.map(r => {
-        // Check specific child match
-        const isChildThisSaved = BOOKMARKS.some(b => b.link === r.link);
-        const childTitleColor = isChildThisSaved ? 'text-orange-400' : 'text-slate-400';
+                   ${item.relatedItems.map(r => {
+          // Check specific child match
+          const isChildThisSaved = BOOKMARKS.some(b => b.link === r.link);
+          const childTitleColor = isChildThisSaved ? 'text-orange-400' : 'text-slate-400';
 
-        return `<div class="flex justify-between items-center gap-3">
+          return `<div class="flex justify-between items-center gap-3">
                        <input type="checkbox" class="bulk-check child-check shrink-0 w-4 h-4 border-slate-600 rounded" data-link="${r.link}" data-title="${escapeHtml(r.title)}" data-source="${escapeHtml(r.source)}" data-date="${r.date}" onchange="updateBulkBar()">
                        <div class="flex-1 min-w-0">
                          <div class="flex items-baseline justify-between">
@@ -1233,36 +1177,41 @@ async function renderReader() {
                          <div class="text-[12px] ${childTitleColor} truncate leading-snug cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(r.link)}${searchParam}&page=${PAGE}'">${escapeHtml(r.title)}</div>
                        </div>
                      </div>`;
-      }).join('')}
+        }).join('')}
                 </div>
             </details>
           </div>
         </article>`
-    }
+      }
 
-    // STANDARD ITEM RENDERING (Fallback)
-    // If it was a cluster but downgraded (validChildren.length == 0), 'item' is the cluster object (primary data)
-    // and we proceed here.
-    const hasRead = READ_HISTORY.includes(item.link) && CATEGORY !== 'BOOKMARKS';
-    const isSaved = BOOKMARKS.some(b => b.link === item.link);
+      // STANDARD ITEM RENDERING (Fallback)
+      // V144.2 Fix: Never dim items in Read Later (Bookmarks) view
+      const hasRead = READ_HISTORY.includes(item.link) && CATEGORY !== 'BOOKMARKS';
+      const isSaved = BOOKMARKS.some(b => b.link === item.link);
 
-    // V144.1: Child Save Indication (for standard items that happen to have relatedLinks from RSS, rare but possible)
-    let isChildSaved = false;
-    if (item.relatedLinks) {
-      try {
-        const children = JSON.parse(decodeURIComponent(item.relatedLinks));
-        isChildSaved = children.some(link => BOOKMARKS.some(b => b.link === link));
-      } catch (e) { }
-    }
+      // V144.1: Child Save Indication
+      let isChildSaved = false;
+      // V144.2 Fix: Removed strict 'type===cluster' check. Rely on data existence.
+      if (item.relatedLinks) {
+        try {
+          const children = JSON.parse(decodeURIComponent(item.relatedLinks));
+          isChildSaved = children.some(link => BOOKMARKS.some(b => b.link === link));
+        } catch (e) { }
+      }
 
-    const isFav = FAVORITES.some(f => f.link === item.link);
-    const isNew = (new Date() - new Date(item.date)) < newCutoff;
-    const showSave = CATEGORY !== 'FAVORITES';
-    const bookmarkIcon = isSaved ? 'bookmark' : 'bookmark_border';
-    const bookmarkColor = (isSaved || isChildSaved) ? 'text-orange-500' : 'text-slate-400';
-    const bookmarkLabelColor = (isSaved || isChildSaved) ? 'text-orange-500' : 'text-slate-400';
+      const isFav = FAVORITES.some(f => f.link === item.link);
+      const isNew = (new Date() - new Date(item.date)) < newCutoff;
+      const showSave = CATEGORY !== 'FAVORITES';
 
-    return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(item.title.toLowerCase())}" data-link="${item.link}" data-title="${escapeHtml(item.title)}" data-source="${escapeHtml(item.source)}" data-date="${item.date}" data-desc="${escapeHtml(item.desc || '')}" data-related-links="${item.relatedLinks || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
+      // V144.1: Visual Logic for Bookmark
+      // Parent Saved = Filled + Orange
+      // Child Saved (Parent not) = Border + Orange
+      // Neither = Border + Slate
+      const bookmarkIcon = isSaved ? 'bookmark' : 'bookmark_border';
+      const bookmarkColor = (isSaved || isChildSaved) ? 'text-orange-500' : 'text-slate-400';
+      const bookmarkLabelColor = (isSaved || isChildSaved) ? 'text-orange-500' : 'text-slate-400';
+
+      return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(item.title.toLowerCase())}" data-link="${item.link}" data-title="${escapeHtml(item.title)}" data-source="${escapeHtml(item.source)}" data-date="${item.date}" data-desc="${escapeHtml(item.desc || '')}" data-related-links="${item.relatedLinks || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
       <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
       <div class="px-4 pt-4 pb-2">
         <div class="flex justify-between items-baseline mb-1.5">
@@ -1364,7 +1313,7 @@ async function renderReader() {
     <span class="material-icons-round text-blue-400 text-2xl">arrow_downward</span>
   </div>
   <div id="bulkBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass border border-slate-700 rounded-full px-6 py-3 hidden flex items-center gap-8 shadow-2xl z-50">
-     <button onclick="playAll()" class="flex flex-col items-center"><span class="material-icons-round text-blue-500">volume_up</span><span class="text-[9px] uppercase font-bold text-blue-500">Listen</span></button>
+     <button onclick="bulkPlay()" class="flex flex-col items-center"><span class="material-icons-round text-blue-500">volume_up</span><span class="text-[9px] uppercase font-bold text-blue-500">Listen</span></button>
      <button onclick="bulkBookmark()" class="flex flex-col items-center"><span class="material-icons-round text-orange-500">bookmark</span><span class="text-[9px] uppercase font-bold text-orange-500">Save</span></button>
      <button onclick="bulkRead()" class="flex flex-col items-center"><span class="material-icons-round text-green-500">check_circle</span><span class="text-[9px] uppercase font-bold text-green-500">Read</span></button>
      <div class="h-6 w-[1px] bg-slate-700"></div>
