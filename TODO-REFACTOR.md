@@ -35,11 +35,12 @@
     - File selection logic (`EXCLUSION_FILE` vs `INCLUSION_FILE`) repeated
   - **Impact**: Extracted to shared `updateTagFile(type, updateFn)` helper
   
-- [x] 19. **Consolidate Bulk Actions** ✅ COMPLETE (V143.2)
+- [x] 19. **Consolidate Bulk Actions** ✅ COMPLETE (V143.2 / Fixed V145.5)
   - **Refactored**: `playAll`, `bulkRead`, `bulkBookmark`, `bulkFav` use `collectBulkSelection()` wrapper.
   - **Verified**: Bulk Save correctly adds to Bookmarks without creating "dimmed" (Read) state, matching Single Save behavior. Parent/Child logic preserved.
+  - **Fixed (V145.5)**: Resolved regression where "Listen" button called missing `bulkPlay()` function.
   - **Lines**: 1367-1444 (Reduced by ~50 lines)
-  
+
 - [x] 20. **Fix Code Duplication & Enhancements** ✅ COMPLETE (V144.3 - V144.4)
   - **Refactor**: Created `getCachePath(name)` helper to centralize cache file logic (replaced 6 occurrences).
   - **Fix**: Improved `extract` function to handle HTML entities (`&apos;`, `&quot;`, etc.) in titles.

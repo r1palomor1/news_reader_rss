@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V148.1
-// Status: Fix UI Event Handlers (includes Dirty Text logic)
+// Version: V147.3
+// Status: Bulk Summary Fix (Routed via Script)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -31,7 +31,6 @@ const MAX_LOG_SIZE = 10000  // Maximum debug log size in characters
 const BASE_THRESHOLD = 0.28  // Jaccard similarity threshold for standard titles
 const SHORT_THRESHOLD = 0.20  // Lower threshold for short titles (≤5 tokens)
 const TIME_WINDOW = 36 * 60 * 60 * 1000  // 36-hour clustering window (ms)
-const HF_API_URL = "https://r1palomor1-news-reader-summarizer.hf.space/summarize"
 
 if (!fm.fileExists(CACHE_DIR)) fm.createDirectory(CACHE_DIR)
 
@@ -610,63 +609,11 @@ if (args.queryParameters.summarize) {
   });
   saveHistory(READ_HISTORY)
 
-  // V148.0: Smart Summary Logic
-  // Check if we already have the summary mode from the UI menu
-  const mode = args.queryParameters.mode || "full";
-
-  if (mode === "full") {
-    // Legacy Behavior: Just read it directly
-    const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
-    const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
-    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
-  } else {
-    // Smart Backend Call
-    const notif = new Notification();
-    notif.title = "🧠 Generating Smart Summary...";
-    notif.body = "Analyzing content on Hugging Face...";
-    notif.schedule();
-
-    try {
-      // 1. Fetch Article Text
-      // We can try fetching the URL content here or let the backend do it.
-      // Since the backend expects 'text', let's use the WebView to get text or just pass URL if we update backend.
-      // Wait, the backend expects 'text'. We need to fetch the article body here.
-      // Simple heuristic: Fetch HTML, strip tags.
-      const req = new Request(url);
-      const html = await req.loadString();
-      // Very rough text extraction
-      const text = html.replace(/<script[^>]*>([\S\s]*?)<\/script>/gmi, "").replace(/<style[^>]*>([\S\s]*?)<\/style>/gmi, "").replace(/<[^>]+>/g, "\n").replace(/\s+/g, " ").trim();
-
-      // 2. Send to Hugging Face
-      const apiReq = new Request(HF_API_URL);
-      apiReq.method = "POST";
-      apiReq.headers = { "Content-Type": "application/json" };
-      apiReq.timeoutInterval = 60; // Give it time (cold start)
-      apiReq.body = JSON.stringify({ text: text, mode: mode });
-
-      const resp = await apiReq.loadJSON();
-
-      if (resp.summary) {
-        // 3. Send Summary to Shortcut
-        const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
-        const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
-        // We pass the SUMMARY text, not the URL
-        Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(resp.summary)}&x-success=${callback}`);
-      } else {
-        throw new Error(resp.error || "Unknown API Error");
-      }
-    } catch (e) {
-      const a = new Alert();
-      a.title = "Summary Failed";
-      a.message = "Falling back to standard mode. Error: " + e.message;
-      a.addAction("OK");
-      await a.present();
-      // Fallback
-      const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
-      const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
-      Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
-    }
-  }
+  // Trigger Dedicated "Summarize Article" Shortcut
+  // Note: We no longer need the SUMMARIZE: prefix because we are calling a specific shortcut
+  const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
+  const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
+  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
   return;
 }
 
@@ -1515,96 +1462,13 @@ async function renderReader() {
   function handleSwipe(evt, el) { if (!xDown || !yDown) return; let xDiff = xDown - evt.changedTouches[0].clientX; let yDiff = yDown - evt.changedTouches[0].clientY; if (Math.abs(xDiff) > 80 && Math.abs(xDiff) > Math.abs(yDiff)) executeAction(el, xDiff > 0 ? 'bookmark' : 'check'); xDown = null; yDown = null; }
   function executeAction(el, type) { 
     const card = el.closest('.news-card'); 
-    
-    // V148.0: Intercept Summary for Menu
-    if (type === 'summarize') {
-        showSummaryMenu(card.dataset.link, card.dataset.relatedLinks);
-        return;
-    }
-
     const search = encodeURIComponent(document.getElementById('searchInput').value); 
     let extra = '';
-    if ((type === 'listen' || type === 'bookmark') && card.dataset.relatedLinks) {
+    if ((type === 'listen' || type === 'bookmark' || type === 'summarize') && card.dataset.relatedLinks) {
        extra = '&readLinks=' + card.dataset.relatedLinks;
     }
     const params = 'search=' + search + '&page=${PAGE}&title=' + encodeURIComponent(card.dataset.title) + '&source=' + encodeURIComponent(card.dataset.source) + '&date=' + encodeURIComponent(card.dataset.date) + '&desc=' + encodeURIComponent(card.dataset.desc); 
     window.location.href = '${scriptUrl}?' + type + '=' + encodeURIComponent(card.dataset.link) + '&' + params + extra; 
-  }
-
-  // V148.1: Smart Summary Menu (Refactored for Reliability)
-  function showSummaryMenu(link, relatedLinks) {
-      const existing = document.getElementById('summaryMenuOverlay');
-      if (existing) existing.remove();
-
-      const menu = document.createElement('div');
-      menu.id = 'summaryMenuOverlay';
-      menu.className = 'fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm';
-      
-      // We store the data on the menu itself to avoid passing it through HTML strings
-      menu.dataset.link = link;
-      menu.dataset.related = relatedLinks || '';
-
-      menu.innerHTML = \`
-        <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-[85%] max-w-sm shadow-2xl transform scale-100 transition-all">
-           <h3 class="text-xl font-black text-white mb-2 uppercase tracking-tight">AI Summary Mode</h3>
-           <p class="text-slate-400 text-xs mb-6">Choose how you want to listen to this article.</p>
-           
-           <div class="space-y-3">
-              <button data-mode="full" class="summary-btn w-full flex items-center justify-between p-4 rounded-xl bg-slate-800 border border-slate-700 hover:border-blue-500 transition-colors group">
-                 <div class="text-left">
-                    <div class="text-blue-400 font-bold text-sm uppercase">Full Audio</div>
-                    <div class="text-slate-500 text-[10px]">Read the entire article text</div>
-                 </div>
-                 <span class="material-icons-round text-blue-500">volume_up</span>
-              </button>
-
-              <button data-mode="half" class="summary-btn w-full flex items-center justify-between p-4 rounded-xl bg-slate-800 border border-slate-700 hover:border-purple-500 transition-colors group">
-                 <div class="text-left">
-                    <div class="text-purple-400 font-bold text-sm uppercase">Smart Summary</div>
-                    <div class="text-slate-500 text-[10px]">Concise 50% length (AI Generated)</div>
-                 </div>
-                 <span class="material-icons-round text-purple-500">auto_awesome</span>
-              </button>
-
-               <button data-mode="short" class="summary-btn w-full flex items-center justify-between p-4 rounded-xl bg-slate-800 border border-slate-700 hover:border-green-500 transition-colors group">
-                 <div class="text-left">
-                    <div class="text-green-400 font-bold text-sm uppercase">Quick Recap</div>
-                    <div class="text-slate-500 text-[10px]">Super short 30% overview</div>
-                 </div>
-                 <span class="material-icons-round text-green-500">bolt</span>
-              </button>
-           </div>
-           
-           <button id="closeSummaryMenu" class="mt-6 w-full py-3 text-slate-500 font-bold uppercase text-xs hover:text-white">Cancel</button>
-        </div>
-      \`;
-      document.body.appendChild(menu);
-
-      // Attach Event Listeners Safely (No Inline JS)
-      document.querySelectorAll('.summary-btn').forEach(btn => {
-          btn.addEventListener('click', (e) => {
-              e.stopPropagation(); // Stop bubbling
-              const mode = btn.dataset.mode;
-              triggerSummary(menu.dataset.link, menu.dataset.related, mode);
-          });
-      });
-
-      document.getElementById('closeSummaryMenu').addEventListener('click', () => {
-          menu.remove();
-      });
-  }
-
-  function triggerSummary(link, relatedLinks, mode) {
-      const menu = document.getElementById('summaryMenuOverlay');
-      if (menu) menu.remove();
-      
-      const search = encodeURIComponent(document.getElementById('searchInput').value);
-      let extra = '';
-      if (relatedLinks && relatedLinks !== 'undefined' && relatedLinks !== 'null' && relatedLinks !== '') {
-          extra = '&readLinks=' + relatedLinks;
-      }
-      // Pass the MODE to the script
-      window.location.href = '${scriptUrl}?summarize=' + encodeURIComponent(link) + '&mode=' + mode + '&search=' + search + '&page=${PAGE}' + extra;
   }
   
   // V140.1: Debounce search input - immediate UI feedback, delayed filtering

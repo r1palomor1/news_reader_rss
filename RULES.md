@@ -24,3 +24,9 @@
    **Bottom line:** Prove understanding through verification, not assumption. Accuracy over speed.
 
 **PENALTY FOR VIOLATION:** IMMEDIATE STOP.
+
+5. **MANDATORY VERSION & STATUS UPDATES:**
+   - **ALWAYS** update the header in `News Reader (RSS).js` when modifying code.
+   - **New Feature/Task:** Increment major version (e.g., V147.0 → V148.0).
+   - **Fix/Sub-task:** Increment minor version (e.g., V147.1 → V147.2).
+   - **Status Comment:** Must accurately reflect the specific work done.
