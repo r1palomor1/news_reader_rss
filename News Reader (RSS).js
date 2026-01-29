@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V148.1
-// Status: Fix UI Event Handlers (includes Dirty Text logic)
+// Version: V149.1
+// Status: Route Full Audio to Read Article (IN PROGRESS - AI Quality Issues)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -610,62 +610,24 @@ if (args.queryParameters.summarize) {
   });
   saveHistory(READ_HISTORY)
 
-  // V148.0: Smart Summary Logic
+  // V149.0: Smart Shortcut Protocol
   // Check if we already have the summary mode from the UI menu
   const mode = args.queryParameters.mode || "full";
 
   if (mode === "full") {
-    // Legacy Behavior: Just read it directly
+    // Legacy Behavior: Just send the URL
     const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
     const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
-    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
+    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
   } else {
-    // Smart Backend Call
-    const notif = new Notification();
-    notif.title = "🧠 Generating Smart Summary...";
-    notif.body = "Analyzing content on Hugging Face...";
-    notif.schedule();
+    // Smart Mode: Send "MODE:URL" command to Shortcut
+    // The Shortcut will handle extraction (Clean Reader) and API calling
+    const command = `${mode.toUpperCase()}:${url}`;
 
-    try {
-      // 1. Fetch Article Text
-      // We can try fetching the URL content here or let the backend do it.
-      // Since the backend expects 'text', let's use the WebView to get text or just pass URL if we update backend.
-      // Wait, the backend expects 'text'. We need to fetch the article body here.
-      // Simple heuristic: Fetch HTML, strip tags.
-      const req = new Request(url);
-      const html = await req.loadString();
-      // Very rough text extraction
-      const text = html.replace(/<script[^>]*>([\S\s]*?)<\/script>/gmi, "").replace(/<style[^>]*>([\S\s]*?)<\/style>/gmi, "").replace(/<[^>]+>/g, "\n").replace(/\s+/g, " ").trim();
+    const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
+    const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
 
-      // 2. Send to Hugging Face
-      const apiReq = new Request(HF_API_URL);
-      apiReq.method = "POST";
-      apiReq.headers = { "Content-Type": "application/json" };
-      apiReq.timeoutInterval = 60; // Give it time (cold start)
-      apiReq.body = JSON.stringify({ text: text, mode: mode });
-
-      const resp = await apiReq.loadJSON();
-
-      if (resp.summary) {
-        // 3. Send Summary to Shortcut
-        const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
-        const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
-        // We pass the SUMMARY text, not the URL
-        Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(resp.summary)}&x-success=${callback}`);
-      } else {
-        throw new Error(resp.error || "Unknown API Error");
-      }
-    } catch (e) {
-      const a = new Alert();
-      a.title = "Summary Failed";
-      a.message = "Falling back to standard mode. Error: " + e.message;
-      a.addAction("OK");
-      await a.present();
-      // Fallback
-      const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
-      const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
-      Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
-    }
+    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(command)}&x-success=${callback}`);
   }
   return;
 }
