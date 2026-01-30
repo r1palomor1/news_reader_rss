@@ -110,18 +110,18 @@ def summarize_text(text: str, min_len: int, max_len: int) -> str:
 
 def compute_dynamic_length(input_len: int, ratio: float) -> tuple[int, int]:
     """
-    DYNAMIC SCALING LOGIC:
+    DYNAMIC SCALING LOGIC (BOUNDED):
     Calculates target output length based on input size + ratio.
-    Clamps results to model safety bounds (T5-Base limits).
+    Clamps results to strictly safe model bounds (T5-Base Cliff = ~280).
     """
-    MAX_SAFE = 300 # Max tokens T5-Base can consistently generate without loop-failure
-    MIN_SAFE = 60
+    MAX_SAFE = 280 # REC: T5 stability cliff. Going higher risks hallucinations.
+    MIN_SAFE = 120 # REC: Ensure we never output "tweet-sized" summaries.
     
     target = int(input_len * ratio)
     
     # Calculate bounds
-    lower_bound = max(MIN_SAFE, int(target * 0.60)) # Allow some flexibility downwards
-    upper_bound = min(MAX_SAFE, target)             # Never exceed safe model limit
+    lower_bound = max(MIN_SAFE, int(target * 0.60)) 
+    upper_bound = min(MAX_SAFE, target)             
     
     # Ensure min < max
     if lower_bound >= upper_bound:
@@ -131,7 +131,7 @@ def compute_dynamic_length(input_len: int, ratio: float) -> tuple[int, int]:
 
 def chunk_and_summarize(text: str, mode: str = "half") -> str:
     """
-    Two-Pass Summarization with Dynamic Scaling.
+    Two-Pass Summarization with Bounded Dynamic Scaling.
     """
     tokens = tokenizer.encode(text)
     total_tokens = len(tokens)
@@ -148,28 +148,25 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
         idx += size
         first = False
 
-    # 2. DETERMINE RATIOS
+    # 2. DETERMINE RATIOS (V149.5 Tuning)
     if mode == "short":
-        # Quick Recap: Aggressive compression
-        chunk_ratio = 0.25 # Keep 25% of chunks
-        final_ratio = 0.20 # Keep 20% of total
+        # Quick Recap: ~15% retention
+        chunk_ratio = 0.20 
+        final_ratio = 0.15 
     else: 
-        # Smart Summary: Minimal compression
-        chunk_ratio = 0.60 # Keep 60% of chunks (Maximum Detail)
-        final_ratio = 0.50 # Aim for 50% of original, clamped at MAX_SAFE
+        # Smart Summary: ~35% retention (Safe Max)
+        chunk_ratio = 0.45 # Keep 45% of chunks (Intermediate Detail)
+        final_ratio = 0.35 # Aim for 35% of original
 
     # 3. PASS 1 (Summarize Chunks)
     partial_summaries = []
     print(f"Processing {len(chunks)} chunks from {total_tokens} tokens... Mode: {mode}")
     
     for i, chunk in enumerate(chunks):
-        # Measure this specific chunk
         c_len = len(tokenizer.encode(chunk))
         p1_min, p1_max = compute_dynamic_length(c_len, chunk_ratio)
         
-        # Log the dynamic decision
         print(f"  Chunk {i+1}: {c_len} tokens -> Target {p1_min}-{p1_max}")
-        
         s = summarize_text(chunk, p1_min, p1_max)
         partial_summaries.append(s)
 
@@ -177,17 +174,16 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
     combined_text = " ".join(partial_summaries)
     comb_len = len(tokenizer.encode(combined_text))
     
-    # Calculate Final Targets based on the COMBINED text size
-    # logical_target = total_tokens * final_ratio (The User Dream)
-    # real_target = comb_len * 0.7 (The Physical Reality check)
-    p2_min, p2_max = compute_dynamic_length(comb_len, 0.70) 
+    # Calculate Final Targets based on COMBINED length
+    # We use a slightly higher ratio here (0.4) relative to the intermediate text
+    # to avoid crushing the already-summarized data too hard.
+    p2_min, p2_max = compute_dynamic_length(comb_len, 0.40) 
     
-    # Hard override: If mode is "half", force near-max usage
+    # Mode Override: If "half", try to max it out within safety limits
     if mode == "half":
-        p2_max = 300 # Force it to use the full capacity
+         p2_max = 280 # Force usage of the full safe window
         
     print(f"  Final Pass: {comb_len} tokens (Intermediate) -> Target {p2_min}-{p2_max}")
-    
     final_raw = summarize_text(combined_text, p2_min, p2_max)
     
     # METRICS: Raw

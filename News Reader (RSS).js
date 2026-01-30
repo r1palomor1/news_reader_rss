@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V149.4
-// Status: AI Summary Tuning (Retention & Hallucinations)
+// Version: V149.5
+// Status: AI: Bounded Dynamic Logic & Refresh UI
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -1006,7 +1006,7 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
         <span id="headerSub" class="text-[12px] uppercase font-medium ${showUnreadOnly ? 'text-blue-400' : 'text-red-500 font-bold'}">${headerSubText}</span>
       </div>
       <div class="flex gap-4 items-center">
-        <button id="playBtn" onclick="playAll()" class="p-1"><span class="material-icons-round text-blue-500">play_circle</span></button>
+        <button id="refreshBtn" onclick="window.location.href='${scriptUrl}?refresh=true&prevCat=' + encodeURIComponent('${returnSource}')" class="p-1"><span class="material-icons-round text-slate-400">refresh</span></button>
         <button onclick="toggleMenu(event)" class="p-1"><span class="material-icons-round ${showUnreadOnly ? 'text-slate-500' : 'text-red-500'}">more_vert</span></button>
       </div>
     </div>
