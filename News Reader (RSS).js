@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V149.1
-// Status: Route Full Audio to Read Article (IN PROGRESS - AI Quality Issues)
+// Version: V149.4
+// Status: AI Summary Tuning (Retention & Hallucinations)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -1454,7 +1454,7 @@ async function renderReader() {
   </div>
    <div id="bulkBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass border border-slate-700 rounded-full px-6 py-3 hidden items-center gap-6 shadow-2xl z-50">
       <button onclick="playAll()" class="flex flex-col items-center"><span class="material-icons-round text-blue-500">volume_up</span><span class="text-[9px] uppercase font-bold text-blue-500">Listen</span></button>
-      <button onclick="bulkSummarize()" class="flex flex-col items-center"><span class="material-icons-round text-purple-400">auto_awesome</span><span class="text-[9px] uppercase font-bold text-purple-400">AI</span></button>
+      <button id="bulkAiBtn" onclick="bulkSummarize()" class="flex flex-col items-center"><span class="material-icons-round text-purple-400">auto_awesome</span><span class="text-[9px] uppercase font-bold text-purple-400">AI</span></button>
       <button onclick="bulkBookmark()" class="flex flex-col items-center"><span class="material-icons-round text-orange-500">bookmark</span><span class="text-[9px] uppercase font-bold text-orange-500">Save</span></button>
       <button onclick="bulkRead()" class="flex flex-col items-center"><span class="material-icons-round text-green-500">check_circle</span><span class="text-[9px] uppercase font-bold text-green-500">Read</span></button>
       <button onclick="bulkFav()" class="flex flex-col items-center"><span class="material-icons-round text-yellow-500">star</span><span class="text-[9px] uppercase font-bold text-yellow-500">Fav</span></button>
@@ -1644,7 +1644,25 @@ async function renderReader() {
     window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
   }
 
-  function updateBulkBar() { const checked = document.querySelectorAll('.bulk-check:checked'); const bar = document.getElementById('bulkBar'); if (checked.length > 0) { bar.classList.remove('hidden'); bar.classList.add('flex'); } else { bar.classList.add('hidden'); bar.classList.remove('flex'); } }
+  function updateBulkBar() { 
+    const checked = document.querySelectorAll('.bulk-check:checked'); 
+    const bar = document.getElementById('bulkBar'); 
+    if (checked.length > 0) { 
+      bar.classList.remove('hidden'); 
+      bar.classList.add('flex'); 
+      
+      // V149.2: Disable AI Summary for Multi-Select (Only allow 1 item)
+      const aiBtn = document.getElementById('bulkAiBtn');
+      if (checked.length > 1) {
+        aiBtn.classList.add('opacity-30', 'pointer-events-none', 'grayscale');
+      } else {
+        aiBtn.classList.remove('opacity-30', 'pointer-events-none', 'grayscale');
+      }
+    } else { 
+      bar.classList.add('hidden'); 
+      bar.classList.remove('flex'); 
+    } 
+  }
   
   // V143.0 Refactor: Consolidated Bulk Logic
   function collectBulkSelection() {
@@ -1699,6 +1717,13 @@ async function renderReader() {
     const items = collectBulkSelection();
     if (items.length === 0) return;
     
+    // V149.3: Single Item = Open Menu (Smart/Full/Quick)
+    if (items.length === 1) {
+       showSummaryMenu(items[0].link, items[0].relatedLinks);
+       return;
+    }
+    
+    // Legacy Fallback (Should be unreachable given UI disable logic, but safe to keep)
     // For summary, we only take the first 5 items to prevent insane token usage/timeouts
     const targetItems = items.slice(0, 5);
     const urls = targetItems.map(i => i.link).join(',');
