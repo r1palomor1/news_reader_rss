@@ -4,6 +4,8 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import torch
 import re
 
+# Last Updated: V149.5 (Paragraph Chunking Logic)
+
 # ==========================================
 # ⚙️ CONFIGURATION (LOCKED - DO NOT TOUCH)
 # ==========================================
@@ -119,13 +121,19 @@ def compute_dynamic_length(input_len: int, ratio: float) -> tuple[int, int]:
     
     target = int(input_len * ratio)
     
-    # Calculate bounds
-    lower_bound = max(MIN_SAFE, int(target * 0.60)) 
-    upper_bound = min(MAX_SAFE, target)             
+    # Handle "Runt Chunks" (Small inputs like the last paragraph)
+    # If the target is smaller than our standard MIN_SAFE, we must lower the floor.
+    if target < MIN_SAFE:
+        lower_bound = max(30, int(target * 0.5)) # Allow small chunks to be summarized briefly
+        upper_bound = target + 10                # Allow slight expansion
+    else:
+        # Standard Logic for Healthy Chunks
+        lower_bound = max(MIN_SAFE, int(target * 0.60)) 
+        upper_bound = min(MAX_SAFE, target)             
     
-    # Ensure min < max
+    # 🛡️ Safety: Ensure min < max is ALWAYS true
     if lower_bound >= upper_bound:
-        lower_bound = max(MIN_SAFE, upper_bound - 10)
+        lower_bound = max(10, upper_bound - 10)
         
     return lower_bound, upper_bound
 
@@ -137,30 +145,62 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
     total_tokens = len(tokens)
     chunks = []
     
-    # 1. SPLIT (Token level)
-    idx = 0
-    first = True
-    while idx < total_tokens and len(chunks) < MAX_CHUNKS:
-        size = FIRST_CHUNK_TOKENS if first else OTHER_CHUNK_TOKENS
-        chunk_tokens = tokens[idx : idx + size]
-        chunk_text = tokenizer.decode(chunk_tokens, skip_special_tokens=True)
-        chunks.append(chunk_text)
-        idx += size
-        first = False
+    # 1. PARAGRAPH-AWARE BUCKETING
+    # We group paragraphs to form healthy chunks (~512 tokens).
+    # This reduces AI calls (solving timeouts) while maintaining context.
+    
+    raw_paragraphs = text.split("\n")
+    processed_chunks = []
+    
+    current_chunk_tokens = []
+    current_chunk_size = 0
+    TARGET_CHUNK_SIZE = 512 # Sweet spot for T5-Base
 
-    # 2. DETERMINE RATIOS (V149.5 Tuning)
+    for para in raw_paragraphs:
+        para = para.strip()
+        if not para: continue
+            
+        p_tokens = tokenizer.encode(para, add_special_tokens=False)
+        p_len = len(p_tokens)
+        
+        # Monster Paragraph Logic
+        if p_len > TARGET_CHUNK_SIZE:
+             for i in range(0, p_len, TARGET_CHUNK_SIZE):
+                 sub_tokens = p_tokens[i : i + TARGET_CHUNK_SIZE]
+                 processed_chunks.append(tokenizer.decode(sub_tokens, skip_special_tokens=True))
+             continue
+
+        # Bucket Limit Check
+        if current_chunk_size + p_len > TARGET_CHUNK_SIZE:
+            # Seal Bucket
+            chunk_text = tokenizer.decode(current_chunk_tokens, skip_special_tokens=True)
+            if chunk_text: processed_chunks.append(chunk_text)
+            
+            # Start New Bucket
+            current_chunk_tokens = p_tokens
+            current_chunk_size = p_len
+        else:
+            # Add to Bucket
+            if current_chunk_tokens: current_chunk_tokens.extend(p_tokens)
+            else: current_chunk_tokens = p_tokens
+            current_chunk_size += p_len
+
+    if current_chunk_tokens:
+        chunk_text = tokenizer.decode(current_chunk_tokens, skip_special_tokens=True)
+        processed_chunks.append(chunk_text)
+
+    chunks = processed_chunks
+
+    # 2. DETERMINE RATIOS
     if mode == "short":
-        # Quick Recap: ~15% retention
-        chunk_ratio = 0.20 
-        final_ratio = 0.15 
+        chunk_ratio = 0.25
     else: 
-        # Smart Summary: ~35% retention (Safe Max)
-        chunk_ratio = 0.45 # Keep 45% of chunks (Intermediate Detail)
-        final_ratio = 0.35 # Aim for 35% of original
+        # Smart Summary: High Retention (45%)
+        chunk_ratio = 0.45 
 
     # 3. PASS 1 (Summarize Chunks)
     partial_summaries = []
-    print(f"Processing {len(chunks)} chunks from {total_tokens} tokens... Mode: {mode}")
+    print(f"Processing {len(chunks)} grouped chunks from {total_tokens} tokens... Mode: {mode}")
     
     for i, chunk in enumerate(chunks):
         c_len = len(tokenizer.encode(chunk))
@@ -170,35 +210,24 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
         s = summarize_text(chunk, p1_min, p1_max)
         partial_summaries.append(s)
 
-    # 4. PASS 2 (Reduce)
+    # 4. FINALIZE
     combined_text = " ".join(partial_summaries)
     comb_len = len(tokenizer.encode(combined_text))
     
-    # Calculate Final Targets based on COMBINED length
-    # We use a slightly higher ratio here (0.4) relative to the intermediate text
-    # to avoid crushing the already-summarized data too hard.
-    p2_min, p2_max = compute_dynamic_length(comb_len, 0.40) 
+    print(f"\n--- INTERMEDIATE STATS ---")
+    print(f"Total Chunks: {len(chunks)}")
+    print(f"Combined Output Tokens: {comb_len}")
+    print(f"--------------------------\n")
     
-    # Mode Override: If "half", try to max it out within safety limits
-    if mode == "half":
-         p2_max = 280 # Force usage of the full safe window
-        
-    print(f"  Final Pass: {comb_len} tokens (Intermediate) -> Target {p2_min}-{p2_max}")
-    final_raw = summarize_text(combined_text, p2_min, p2_max)
-    
-    # METRICS: Raw
-    raw_tokens = len(tokenizer.encode(final_raw))
-    raw_pct = (raw_tokens / total_tokens) * 100
-    print(f"--- RAW AI SUMMARY (BEFORE CLEANING) ---\nTokens: {raw_tokens} ({raw_pct:.1f}%)\n{final_raw}\n----------------------------------------")
+    # FOR SMART MODE: We STOP here and return the detailed list.
+    # Pass 2 causes timeouts and hallucinations on long text.
+    if mode != "short":
+        print(f"--- FINAL RESULT (MAP-ONLY) ---\n{combined_text[:500]}...\n-------------------------------")
+        return clean_sentence_end(combined_text)
 
-    # 5. SAFETY
-    cleaned = clean_sentence_end(final_raw)
-    
-    # METRICS: Cleaned
-    clean_tokens = len(tokenizer.encode(cleaned))
-    clean_pct = (clean_tokens / total_tokens) * 100
-    print(f"--- CLEANED SUMMARY ---\nTokens: {clean_tokens} ({clean_pct:.1f}%)\n{cleaned}\n----------------------------------------")
-    return cleaned
+    # For "Short" mode, we might still want to compress (Pass 2 logic below...)
+    final_raw = summarize_text(combined_text, 100, 200) # Quick Recap Logic
+    return clean_sentence_end(final_raw)
 
 # ==========================================
 # 🚀 API ENDPOINT
@@ -215,7 +244,8 @@ def summarize(req: SummaryRequest):
         print(f"--- REQUEST RECEIVED ---")
         token_count = len(tokenizer.encode(req.text)) # REC 5: Log Tokens
         print(f"Input Length: {len(req.text)} chars | Tokens: {token_count}")
-        print(f"Input Preview: {req.text}...")
+        # DEBUG: Show invisible characters to verify newlines
+        print(f"Input Raw Repr: {repr(req.text[:500])}...")
         
         if not req.text or len(req.text.strip()) < 100:
             return {

@@ -1006,7 +1006,7 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
         <span id="headerSub" class="text-[12px] uppercase font-medium ${showUnreadOnly ? 'text-blue-400' : 'text-red-500 font-bold'}">${headerSubText}</span>
       </div>
       <div class="flex gap-4 items-center">
-        <button id="refreshBtn" onclick="window.location.href='${scriptUrl}?refresh=true&prevCat=' + encodeURIComponent('${returnSource}')" class="p-1"><span class="material-icons-round text-slate-400">refresh</span></button>
+        <button id="refreshBtn" onclick="window.location.href='${scriptUrl}?refresh=true&prevCat=' + encodeURIComponent('${returnSource}')" class="p-1"><span class="material-icons-round text-slate-400">sync</span></button>
         <button onclick="toggleMenu(event)" class="p-1"><span class="material-icons-round ${showUnreadOnly ? 'text-slate-500' : 'text-red-500'}">more_vert</span></button>
       </div>
     </div>
