@@ -3,20 +3,22 @@ from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import torch
 import re
+import uuid
+import time
+import threading
 
-# Last Updated: V149.5 (Paragraph Chunking Logic)
+# Last Updated: V160.4 In-House Inbox Architecture (Title Debug Logs)
 
 # ==========================================
 # ⚙️ CONFIGURATION (LOCKED - DO NOT TOUCH)
 # ==========================================
 
-# Neural Generation Params (Anti-Gibberish)
+# Neural Generation Params (BART Optimized)
 GEN_CONFIG = dict(
-    num_beams=3,              # REC: Balance Speed (2) vs Quality (5). 3 is the sweet spot.
-    repetition_penalty=2.5,
-    no_repeat_ngram_size=3,
-    length_penalty=1.0,
-    early_stopping=True
+    num_beams=4,              
+    length_penalty=2.0,
+    early_stopping=True,
+    no_repeat_ngram_size=3
 )
 
 # Output Constraints (Hard Capped)
@@ -35,7 +37,7 @@ MAX_CHUNKS = 8              # Safety cap to prevent timeouts
 # 🧠 MODEL LOADER
 # ==========================================
 print("Loading Model...")
-model_name = "t5-base"
+model_name = "facebook/bart-large-cnn"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 model.eval() # REC 1: Disable dropout for deterministic output
@@ -46,6 +48,7 @@ app = FastAPI()
 class SummaryRequest(BaseModel):
     text: str
     mode: str = "half"  # "half" (Smart) or "short" (Quick)
+    title: str = "Untitled Article"  # Article title for inbox display
 
 def clean_sentence_end(text: str) -> str:
     """ENSURE AUDIO SAFETY: REC 3 - Smarter cleanup that removes AI artifacting."""
@@ -88,7 +91,8 @@ def clean_sentence_end(text: str) -> str:
 
 def summarize_text(text: str, min_len: int, max_len: int) -> str:
     """Core generation wrapper with safety params."""
-    input_text = "summarize: " + text.strip()
+    # BART gets raw text
+    input_text = text.strip()
     
     # Tokenize input
     inputs = tokenizer(
@@ -116,8 +120,8 @@ def compute_dynamic_length(input_len: int, ratio: float) -> tuple[int, int]:
     Calculates target output length based on input size + ratio.
     Clamps results to strictly safe model bounds (T5-Base Cliff = ~280).
     """
-    MAX_SAFE = 280 # REC: T5 stability cliff. Going higher risks hallucinations.
-    MIN_SAFE = 120 # REC: Ensure we never output "tweet-sized" summaries.
+    MAX_SAFE = 450 # BART: Large capacity (Can go to 500, keeping buffer)
+    MIN_SAFE = 150 # BART: Needs room to write fluently
     
     target = int(input_len * ratio)
     
@@ -128,7 +132,7 @@ def compute_dynamic_length(input_len: int, ratio: float) -> tuple[int, int]:
         upper_bound = target + 10                # Allow slight expansion
     else:
         # Standard Logic for Healthy Chunks
-        lower_bound = max(MIN_SAFE, int(target * 0.60)) 
+        lower_bound = max(MIN_SAFE, int(target * 0.85)) # REC: Raised floor (0.60 -> 0.85) to force verbosity
         upper_bound = min(MAX_SAFE, target)             
     
     # 🛡️ Safety: Ensure min < max is ALWAYS true
@@ -154,7 +158,7 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
     
     current_chunk_tokens = []
     current_chunk_size = 0
-    TARGET_CHUNK_SIZE = 512 # Sweet spot for T5-Base
+    TARGET_CHUNK_SIZE = 1000 # BART: Massive appetite (Leaves 24 for overhead)
 
     for para in raw_paragraphs:
         para = para.strip()
@@ -195,18 +199,18 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
     if mode == "short":
         chunk_ratio = 0.25
     else: 
-        # Smart Summary: High Retention (45%)
-        chunk_ratio = 0.45 
+        # Smart Summary: High Retention (55%)
+        chunk_ratio = 0.55 
 
     # 3. PASS 1 (Summarize Chunks)
     partial_summaries = []
-    print(f"Processing {len(chunks)} grouped chunks from {total_tokens} tokens... Mode: {mode}")
+    print(f"Processing {len(chunks)} grouped chunks from {total_tokens} tokens... Mode: {mode}", flush=True)
     
     for i, chunk in enumerate(chunks):
         c_len = len(tokenizer.encode(chunk))
         p1_min, p1_max = compute_dynamic_length(c_len, chunk_ratio)
         
-        print(f"  Chunk {i+1}: {c_len} tokens -> Target {p1_min}-{p1_max}")
+        print(f"  Chunk {i+1}: {c_len} tokens -> Target {p1_min}-{p1_max}", flush=True)
         s = summarize_text(chunk, p1_min, p1_max)
         partial_summaries.append(s)
 
@@ -214,15 +218,18 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
     combined_text = " ".join(partial_summaries)
     comb_len = len(tokenizer.encode(combined_text))
     
-    print(f"\n--- INTERMEDIATE STATS ---")
-    print(f"Total Chunks: {len(chunks)}")
-    print(f"Combined Output Tokens: {comb_len}")
-    print(f"--------------------------\n")
+    retention_rate = (comb_len / total_tokens) * 100 if total_tokens > 0 else 0
+
+    print(f"\n--- INTERMEDIATE STATS ---", flush=True)
+    print(f"Total Tokens: {total_tokens}", flush=True)
+    print(f"AI Summary Tokens: {comb_len}", flush=True)
+    print(f"Retention %: {retention_rate:.1f}%", flush=True)
+    print(f"--------------------------\n", flush=True)
     
     # FOR SMART MODE: We STOP here and return the detailed list.
     # Pass 2 causes timeouts and hallucinations on long text.
     if mode != "short":
-        print(f"--- FINAL RESULT (MAP-ONLY) ---\n{combined_text[:500]}...\n-------------------------------")
+        print(f"--- FINAL RESULT (MAP-ONLY) ---\n{combined_text[:500]}...\n-------------------------------", flush=True)
         return clean_sentence_end(combined_text)
 
     # For "Short" mode, we might still want to compress (Pass 2 logic below...)
@@ -230,42 +237,106 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
     return clean_sentence_end(final_raw)
 
 # ==========================================
-# 🚀 API ENDPOINT
+# � ASYNC INFRASTRUCTURE
+# ==========================================
+JOBS = {} 
+
+def process_summarization_job(job_id: str, text: str, mode: str):
+    """
+    Runs in a separate thread. Updates JOBS[job_id] when done.
+    """
+    print(f"[Job {job_id}] Started...")
+    try:
+        final_summary = chunk_and_summarize(text, mode)
+        JOBS[job_id]["status"] = "done"
+        JOBS[job_id]["output"] = final_summary
+        print(f"[Job {job_id}] COMPLETED. Output len: {len(final_summary)}")
+    except Exception as e:
+        print(f"[Job {job_id}] ERROR: {str(e)}")
+        JOBS[job_id]["status"] = "error"
+        JOBS[job_id]["output"] = f"Error processing summary: {str(e)}"
+
+# ==========================================
+# 🚀 API ENDPOINTS
 # ==========================================
 
 @app.get("/")
 def home():
-    return {"status": "Active", "system": "Recursive-T5-Base-V3-Debug"}
+    return {"status": "Active", "system": "InHouse-Inbox-V160.4"}
 
+@app.post("/submit")
+def submit_job(req: SummaryRequest):
+    """
+    ASYNC SUBMIT: Returns job_id immediately.
+    """
+    job_id = str(uuid.uuid4())
+    
+    # Initialize Job
+    JOBS[job_id] = {
+        "status": "processing",
+        "output": None,
+        "title": req.title,  # Store title for inbox display
+        "created_at": time.time()
+    }
+    
+    # Spawn Thread
+    thread = threading.Thread(
+        target=process_summarization_job,
+        args=(job_id, req.text, req.mode)
+    )
+    thread.start()
+    
+    print(f"--- JOB SUBMITTED: {job_id} ---", flush=True)
+    print(f"Title: {req.title}", flush=True)
+    print(f"Mode: {req.mode}", flush=True)
+    return {"job_id": job_id, "status": "processing"}
+
+@app.get("/status/{job_id}")
+def check_status(job_id: str):
+    """
+    POLL STATUS: Returns 'processing' or 'done' + output.
+    """
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "output": job["output"]
+    }
+
+@app.delete("/delete/{job_id}")
+def delete_job(job_id: str):
+    if job_id in JOBS:
+        del JOBS[job_id]
+        return {"status": "deleted", "id": job_id}
+    raise HTTPException(status_code=404, detail="Job not found")
+
+@app.get("/completed_jobs")
+def get_completed_jobs():
+    """
+    INBOX ENDPOINT: Returns list of all completed jobs.
+    Used by News Reader to show "Green Icon" and populate inbox menu.
+    """
+    completed = []
+    for job_id, job_data in JOBS.items():
+        if job_data["status"] == "done":
+            completed.append({
+                "id": job_id,
+                "title": job_data.get("title", "Untitled"),
+                "timestamp": job_data.get("created_at", 0)
+            })
+    
+    # Sort by oldest first (reading queue order)
+    completed.sort(key=lambda x: x["timestamp"])
+    return {"jobs": completed, "count": len(completed)}
+    
+# Legacy endpoint (Synchronous) for backward compatibility testing
 @app.post("/summarize")
 def summarize(req: SummaryRequest):
     try:
-        # 1. Input Validation
-        print(f"--- REQUEST RECEIVED ---")
-        token_count = len(tokenizer.encode(req.text)) # REC 5: Log Tokens
-        print(f"Input Length: {len(req.text)} chars | Tokens: {token_count}")
-        # DEBUG: Show invisible characters to verify newlines
-        print(f"Input Raw Repr: {repr(req.text[:500])}...")
-        
-        if not req.text or len(req.text.strip()) < 100:
-            return {
-                "summary": "The article is too short to generate a meaningful summary.",
-                "original_counts": 0,
-                "token_count": token_count
-            }
-
-        # 2. Execution
-        final_summary = chunk_and_summarize(req.text, req.mode)
-
-        # 3. Return
-        return {
-            "summary": final_summary,
-            "chunks_processed": True,
-            "token_count": token_count,
-            "status": "success"
-        }
-
+        return {"summary": chunk_and_summarize(req.text, req.mode)}
     except Exception as e:
-        print(f"Error: {str(e)}")
-        # Return a safe fallback error for the UI
-        return {"error": str(e), "summary": "An error occurred during AI processing."}
+        print(f"Sync Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

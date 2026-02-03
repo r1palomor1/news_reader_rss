@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V149.5
-// Status: AI: Bounded Dynamic Logic & Refresh UI
+// Version: V160.4
+// Status: In-House Inbox Architecture (Title Debug Logs)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -19,6 +19,7 @@ const CACHE_DIR = fm.joinPath(dir, "news_cache")
 const TOGGLE_FILE = fm.joinPath(dir, "unread_toggle.txt")
 const VISIT_FILE = fm.joinPath(dir, "last_visit.txt")
 const MASTER_FEED_FILE = fm.joinPath(dir, "master_feed.json")
+const INBOX_FILE = fm.joinPath(dir, "inbox_cache.json") // V160: Local storage for finished summaries
 // New Tag Editor Files
 const EXCLUSION_FILE = fm.joinPath(dir, "tag_exclusions.txt")
 const INCLUSION_FILE = fm.joinPath(dir, "tag_inclusions.txt")
@@ -31,7 +32,7 @@ const MAX_LOG_SIZE = 10000  // Maximum debug log size in characters
 const BASE_THRESHOLD = 0.28  // Jaccard similarity threshold for standard titles
 const SHORT_THRESHOLD = 0.20  // Lower threshold for short titles (≤5 tokens)
 const TIME_WINDOW = 36 * 60 * 60 * 1000  // 36-hour clustering window (ms)
-const HF_API_URL = "https://r1palomor1-news-reader-summarizer.hf.space/summarize"
+const HF_API_URL = "https://r1palomor1-news-reader-summarizer.hf.space/submit"
 
 if (!fm.fileExists(CACHE_DIR)) fm.createDirectory(CACHE_DIR)
 
@@ -218,6 +219,21 @@ async function generateMasterFeed() {
 }
 
 // --- CORE UTILITIES ---
+
+// V160.0: Inbox Checker (Green Icon Logic)
+async function checkServerInbox() {
+  try {
+    const req = new Request(`${HF_API_URL.replace("/submit", "")}/completed_jobs`) // Strip /submit to get base
+    req.timeoutInterval = 3 // Fast check
+    const data = await req.loadJSON()
+    fm.writeString(INBOX_FILE, JSON.stringify(data.jobs || []))
+    return data.jobs || []
+  } catch (e) {
+    logToFile(`[Inbox Check Fail] ${e.message}`)
+    // Return cached if available
+    return await getJsonFile(INBOX_FILE)
+  }
+}
 
 // V144.0 Refactor: Helper for Code Deduplication & Entity Fix
 function getCachePath(name) {
@@ -556,6 +572,28 @@ if (args.queryParameters.playall) {
   return
 }
 
+// V160.0: Play Inbox Summary
+if (args.queryParameters.playSummary) {
+  const jobId = args.queryParameters.playSummary
+  const completionState = encodeURIComponent(`${scriptUrl}?page=${PAGE}`)
+  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Play%20Summary%20IH&input=${jobId}&x-success=${completionState}`)
+  return
+}
+
+// V160.1: Delete Inbox Summary
+if (args.queryParameters.deleteSummary) {
+  const id = args.queryParameters.deleteSummary;
+  try {
+    const baseUrl = HF_API_URL.replace("/submit", "");
+    const req = new Request(`${baseUrl}/delete/${id}`);
+    req.method = "DELETE";
+    await req.loadString();
+  } catch (e) { logToFile("Delete Error: " + e.message); }
+
+  Safari.open(`${scriptUrl}?page=${PAGE}`);
+  return;
+}
+
 if (args.queryParameters.listen) {
   const url = args.queryParameters.listen
 
@@ -615,19 +653,28 @@ if (args.queryParameters.summarize) {
   const mode = args.queryParameters.mode || "full";
 
   if (mode === "full") {
-    // Legacy Behavior: Just send the URL
+    // Legacy Behavior: Just send the URL to Read Article
     const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
     const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
     Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(url)}&x-success=${callback}`);
-  } else {
-    // Smart Mode: Send "MODE:URL" command to Shortcut
-    // The Shortcut will handle extraction (Clean Reader) and API calling
-    const command = `${mode.toUpperCase()}:${url}`;
+  } else if (mode === "short") {
+    // Quick Recap V160: Route to "Summarize Quick IH" with Dictionary
+    const title = args.queryParameters.title || "Unknown Title"
+    logToFile(`[JS-DEBUG] Summarize Title: ${title}`);
+    const inputDict = JSON.stringify({ url: url, title: title })
 
     const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
     const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
+    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Quick%20IH&input=${encodeURIComponent(inputDict)}&x-success=${callback}`);
 
-    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article&input=${encodeURIComponent(command)}&x-success=${callback}`);
+  } else {
+    // Smart Summary V160: Route to "Summarize Article IH" with Dictionary
+    const title = args.queryParameters.title || "Unknown Title"
+    const inputDict = JSON.stringify({ url: url, title: title })
+
+    const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
+    const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
+    Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Summarize%20Article%20IH&input=${encodeURIComponent(inputDict)}&x-success=${callback}`);
   }
   return;
 }
@@ -967,8 +1014,8 @@ function groupArticles(items) {
   return clusters;
 }
 
-// Helper: Render Header (V145.0 Retry)
-async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, headerTitle, headerSubText, showUnreadOnly, pulseTagsList, heatThreshold, category, queryParams) {
+// Helper: Render Header (V160.0 In-House Inbox)
+async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, headerTitle, headerSubText, showUnreadOnly, pulseTagsList, heatThreshold, category, queryParams, inboxItems) {
   // Pulse Pills HTML Generation
   const pulseHtml = pulseTagsList.map(([tag, count]) => {
     const isHot = count >= heatThreshold;
@@ -977,6 +1024,40 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
           <span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span>
         </div>`;
   }).join('');
+
+  // Inbox HTML (Unified Envelope Icon)
+  const hasMail = inboxItems && inboxItems.length > 0;
+  const count = hasMail ? inboxItems.length : 0;
+
+  const inboxIconHtml = `
+    <button onclick="${hasMail ? 'toggleInbox(event)' : ''}" class="p-1 relative mr-2 transition-opacity ${hasMail ? 'opacity-100' : 'opacity-20 cursor-default'}">
+      <span class="material-icons-round ${hasMail ? 'text-green-500' : 'text-slate-500'} text-xl">${hasMail ? 'mark_email_unread' : 'mail_outline'}</span>
+      ${hasMail ? `<span class="absolute -top-1 -right-1 bg-red-600 text-white text-[9px] font-black px-1 rounded-full border border-[#0f172a]">${count}</span>` : ''}
+    </button>`;
+
+  const inboxMenuHtml = hasMail ? `
+    <div id="inboxMenu" class="hidden fixed top-16 right-4 bg-[#1e293b] border border-blue-500/30 rounded-xl shadow-2xl z-[60] w-96 overflow-hidden ring-1 ring-black/50">
+      <div class="px-4 py-3 border-b border-slate-700 flex justify-between items-center bg-[#0f172a]">
+        <span class="text-xs font-black text-green-400 uppercase tracking-widest flex items-center gap-2"><span class="material-icons-round text-sm">auto_awesome</span> Finished Summaries</span>
+        <span onclick="toggleInbox(event)" class="material-icons-round text-slate-400 text-sm cursor-pointer hover:text-white">close</span>
+      </div>
+      <div class="max-h-[60vh] overflow-y-auto">
+        ${inboxItems.map(job => `
+          <div class="p-3 border-b border-slate-800/50 hover:bg-slate-800 transition-colors flex gap-3 group">
+             <div class="flex-1 cursor-pointer" onclick="playSummary('${job.id}')">
+                 <div class="text-[11px] font-bold text-slate-200 leading-tight mb-1 group-hover:text-blue-400 transition-colors">${escapeHtml(job.title)}</div>
+                 <div class="text-[9px] text-slate-500 uppercase font-medium">${new Date(job.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+             </div>
+             <button onclick="playSummary('${job.id}')" class="p-2 bg-slate-800 rounded-full group-hover:bg-green-500/20 transition-all">
+                <span class="material-icons-round text-green-500 text-lg">play_arrow</span>
+             </button>
+             <button onclick="deleteSummary(event, '${job.id}')" class="p-2 ml-1 rounded-full hover:bg-red-500/20 transition-all">
+                <span class="material-icons-round text-slate-600 hover:text-red-500 text-lg">delete_outline</span>
+             </button>
+          </div>
+        `).join('')}
+      </div>
+    </div>` : '';
 
   // Action Menu "Return" Button Logic
   let returnBtnHtml = '';
@@ -1006,10 +1087,12 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
         <span id="headerSub" class="text-[12px] uppercase font-medium ${showUnreadOnly ? 'text-blue-400' : 'text-red-500 font-bold'}">${headerSubText}</span>
       </div>
       <div class="flex gap-4 items-center">
+        ${inboxIconHtml}
         <button id="refreshBtn" onclick="window.location.href='${scriptUrl}?refresh=true&prevCat=' + encodeURIComponent('${returnSource}')" class="p-1"><span class="material-icons-round text-slate-400">sync</span></button>
         <button onclick="toggleMenu(event)" class="p-1"><span class="material-icons-round ${showUnreadOnly ? 'text-slate-500' : 'text-red-500'}">more_vert</span></button>
       </div>
     </div>
+    ${inboxMenuHtml}
     <div class="px-4 pb-2 relative">
       <div class="relative flex items-center">
         <span class="material-icons-round absolute left-3 text-slate-500 text-sm">search</span>
@@ -1036,6 +1119,7 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
 }
 
 async function renderReader() {
+  const inboxItems = await checkServerInbox() // V160: Fetch finished summaries
   const lastVisit = fm.fileExists(VISIT_FILE) ? parseInt(fm.readString(VISIT_FILE)) : 0
   const isStale = (Date.now() - lastVisit) > (10 * 60 * 1000)
 
@@ -1238,7 +1322,7 @@ async function renderReader() {
     }
   }
 
-  let html = await renderReaderHeader(scriptUrl, PAGE, SEARCH_TERM, returnSource, headerTitle, headerSubText, SHOW_UNREAD_ONLY, pulseTagsList, heatThreshold, CATEGORY, args.queryParameters);
+  let html = await renderReaderHeader(scriptUrl, PAGE, SEARCH_TERM, returnSource, headerTitle, headerSubText, SHOW_UNREAD_ONLY, pulseTagsList, heatThreshold, CATEGORY, args.queryParameters, inboxItems);
 
   html += `<main id="newsContainer" class="pt-44 px-4 space-y-3">
 
@@ -1464,8 +1548,15 @@ async function renderReader() {
   let xDown = null, yDown = null;
   const START_IDX = ${startIdx}; const BASE_TOTAL = ${totalCount}; const CLUSTER_HTML = \`${clusterHtml}\`;
   
-  function toggleMenu(e) { e.stopPropagation(); const m = document.getElementById('actionMenu'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; }
-  window.addEventListener('click', () => { document.getElementById('actionMenu').style.display = 'none'; });
+  function toggleMenu(e) { e.stopPropagation(); const m = document.getElementById('actionMenu'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; document.getElementById('inboxMenu')?.classList.add('hidden'); }
+  function toggleInbox(e) { e.stopPropagation(); const m = document.getElementById('inboxMenu'); if(m) { m.classList.toggle('hidden'); } document.getElementById('actionMenu').style.display = 'none'; }
+  function playSummary(jobId) { window.location.href = '${scriptUrl}?playSummary=' + encodeURIComponent(jobId) + '&page=${PAGE}'; }
+  function deleteSummary(e, jobId) { e.stopPropagation(); const row = e.target.closest('.group'); if(row) row.style.display = 'none'; window.location.href = '${scriptUrl}?deleteSummary=' + encodeURIComponent(jobId) + '&page=${PAGE}'; }
+
+  window.addEventListener('click', () => { 
+    document.getElementById('actionMenu').style.display = 'none'; 
+    document.getElementById('inboxMenu')?.classList.add('hidden');
+  });
   function setPulseSearch(tag) { document.getElementById('searchInput').value = tag; filterNews(); }
   function openTagEditor(targetMode, explicitPage) {
     const pulseData = encodeURIComponent(JSON.stringify(${JSON.stringify(pulseTagsList)}));
@@ -1480,7 +1571,7 @@ async function renderReader() {
     
     // V148.0: Intercept Summary for Menu
     if (type === 'summarize') {
-        showSummaryMenu(card.dataset.link, card.dataset.relatedLinks);
+        showSummaryMenu(card.dataset.link, card.dataset.relatedLinks, card.dataset.title);
         return;
     }
 
@@ -1494,7 +1585,7 @@ async function renderReader() {
   }
 
   // V148.1: Smart Summary Menu (Refactored for Reliability)
-  function showSummaryMenu(link, relatedLinks) {
+  function showSummaryMenu(link, relatedLinks, title) {
       const existing = document.getElementById('summaryMenuOverlay');
       if (existing) existing.remove();
 
@@ -1505,6 +1596,7 @@ async function renderReader() {
       // We store the data on the menu itself to avoid passing it through HTML strings
       menu.dataset.link = link;
       menu.dataset.related = relatedLinks || '';
+      menu.dataset.title = title || '';
 
       menu.innerHTML = \`
         <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-[85%] max-w-sm shadow-2xl transform scale-100 transition-all">
@@ -1547,7 +1639,7 @@ async function renderReader() {
           btn.addEventListener('click', (e) => {
               e.stopPropagation(); // Stop bubbling
               const mode = btn.dataset.mode;
-              triggerSummary(menu.dataset.link, menu.dataset.related, mode);
+              triggerSummary(menu.dataset.link, menu.dataset.related, mode, menu.dataset.title);
           });
       });
 
@@ -1556,7 +1648,7 @@ async function renderReader() {
       });
   }
 
-  function triggerSummary(link, relatedLinks, mode) {
+  function triggerSummary(link, relatedLinks, mode, title) {
       const menu = document.getElementById('summaryMenuOverlay');
       if (menu) menu.remove();
       
@@ -1565,8 +1657,8 @@ async function renderReader() {
       if (relatedLinks && relatedLinks !== 'undefined' && relatedLinks !== 'null' && relatedLinks !== '') {
           extra = '&readLinks=' + relatedLinks;
       }
-      // Pass the MODE to the script
-      window.location.href = '${scriptUrl}?summarize=' + encodeURIComponent(link) + '&mode=' + mode + '&search=' + search + '&page=${PAGE}' + extra;
+      // Pass the MODE and TITLE to the script
+      window.location.href = '${scriptUrl}?summarize=' + encodeURIComponent(link) + '&mode=' + mode + '&title=' + encodeURIComponent(title) + '&search=' + search + '&page=${PAGE}' + extra;
   }
   
   // V140.1: Debounce search input - immediate UI feedback, delayed filtering
