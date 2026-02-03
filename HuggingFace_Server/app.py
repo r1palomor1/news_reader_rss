@@ -7,7 +7,7 @@ import uuid
 import time
 import threading
 
-# Last Updated: V160.4 In-House Inbox Architecture (Title Debug Logs)
+# Last Updated: V160.7 In-House Inbox Architecture (Read Status Sync)
 
 # ==========================================
 # ⚙️ CONFIGURATION (LOCKED - DO NOT TOUCH)
@@ -49,6 +49,7 @@ class SummaryRequest(BaseModel):
     text: str
     mode: str = "half"  # "half" (Smart) or "short" (Quick)
     title: str = "Untitled Article"  # Article title for inbox display
+    source: str = "Unknown" # Article source for inbox display
 
 def clean_sentence_end(text: str) -> str:
     """ENSURE AUDIO SAFETY: REC 3 - Smarter cleanup that removes AI artifacting."""
@@ -262,7 +263,7 @@ def process_summarization_job(job_id: str, text: str, mode: str):
 
 @app.get("/")
 def home():
-    return {"status": "Active", "system": "InHouse-Inbox-V160.4"}
+    return {"status": "Active", "system": "InHouse-Inbox-V160.7"}
 
 @app.post("/submit")
 def submit_job(req: SummaryRequest):
@@ -276,6 +277,7 @@ def submit_job(req: SummaryRequest):
         "status": "processing",
         "output": None,
         "title": req.title,  # Store title for inbox display
+        "source": req.source, # Store source for inbox display
         "created_at": time.time()
     }
     
@@ -325,6 +327,7 @@ def get_completed_jobs():
             completed.append({
                 "id": job_id,
                 "title": job_data.get("title", "Untitled"),
+                "source": job_data.get("source", "Unknown"),
                 "timestamp": job_data.get("created_at", 0)
             })
     

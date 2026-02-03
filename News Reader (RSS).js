@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V160.4
-// Status: In-House Inbox Architecture (Title Debug Logs)
+// Version: V160.7
+// Status: In-House Inbox Architecture (Read Status & Badge)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -575,6 +575,13 @@ if (args.queryParameters.playall) {
 // V160.0: Play Inbox Summary
 if (args.queryParameters.playSummary) {
   const jobId = args.queryParameters.playSummary
+
+  // V160.7: Mark as Read in History on Play
+  if (!READ_HISTORY.includes(jobId)) {
+    READ_HISTORY.push(jobId)
+    saveHistory(READ_HISTORY)
+  }
+
   const completionState = encodeURIComponent(`${scriptUrl}?page=${PAGE}`)
   Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Play%20Summary%20IH&input=${jobId}&x-success=${completionState}`)
   return
@@ -660,8 +667,9 @@ if (args.queryParameters.summarize) {
   } else if (mode === "short") {
     // Quick Recap V160: Route to "Summarize Quick IH" with Dictionary
     const title = args.queryParameters.title || "Unknown Title"
+    const source = args.queryParameters.source || "Unknown Source"
     logToFile(`[JS-DEBUG] Summarize Title: ${title}`);
-    const inputDict = JSON.stringify({ url: url, title: title })
+    const inputDict = JSON.stringify({ url: url, title: title, source: source })
 
     const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
     const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
@@ -670,7 +678,8 @@ if (args.queryParameters.summarize) {
   } else {
     // Smart Summary V160: Route to "Summarize Article IH" with Dictionary
     const title = args.queryParameters.title || "Unknown Title"
-    const inputDict = JSON.stringify({ url: url, title: title })
+    const source = args.queryParameters.source || "Unknown Source"
+    const inputDict = JSON.stringify({ url: url, title: title, source: source })
 
     const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
     const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}&cat=${encodeURIComponent(CATEGORY)}${prevCatParam}`);
@@ -1032,30 +1041,36 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
   const inboxIconHtml = `
     <button onclick="${hasMail ? 'toggleInbox(event)' : ''}" class="p-1 relative mr-2 transition-opacity ${hasMail ? 'opacity-100' : 'opacity-20 cursor-default'}">
       <span class="material-icons-round ${hasMail ? 'text-green-500' : 'text-slate-500'} text-xl">${hasMail ? 'mark_email_unread' : 'mail_outline'}</span>
-      ${hasMail ? `<span class="absolute -top-1 -right-1 bg-red-600 text-white text-[9px] font-black px-1 rounded-full border border-[#0f172a]">${count}</span>` : ''}
+      ${(hasMail && inboxItems.filter(i => !READ_HISTORY.includes(i.id)).length > 0) ? `<span class="absolute -top-1 -right-1 bg-red-600 text-white text-[9px] font-black px-1 rounded-full border border-[#0f172a]">${inboxItems.filter(i => !READ_HISTORY.includes(i.id)).length}</span>` : ''}
     </button>`;
 
   const inboxMenuHtml = hasMail ? `
     <div id="inboxMenu" class="hidden fixed top-16 right-4 bg-[#1e293b] border border-blue-500/30 rounded-xl shadow-2xl z-[60] w-96 overflow-hidden ring-1 ring-black/50">
       <div class="px-4 py-3 border-b border-slate-700 flex justify-between items-center bg-[#0f172a]">
-        <span class="text-xs font-black text-green-400 uppercase tracking-widest flex items-center gap-2"><span class="material-icons-round text-sm">auto_awesome</span> Finished Summaries</span>
+        <span class="text-xs font-black text-green-400 uppercase tracking-widest flex items-center gap-2"><span class="material-icons-round text-sm">auto_awesome</span> AI Summaries Ready</span>
         <span onclick="toggleInbox(event)" class="material-icons-round text-slate-400 text-sm cursor-pointer hover:text-white">close</span>
       </div>
       <div class="max-h-[60vh] overflow-y-auto">
-        ${inboxItems.map(job => `
-          <div class="p-3 border-b border-slate-800/50 hover:bg-slate-800 transition-colors flex gap-3 group">
+        ${inboxItems.map(job => {
+    const isRead = READ_HISTORY.includes(job.id);
+    return `
+          <div class="p-3 border-b border-slate-800/50 hover:bg-slate-800 transition-colors flex gap-3 group ${isRead ? 'opacity-40 grayscale-[0.5]' : ''}">
              <div class="flex-1 cursor-pointer" onclick="playSummary('${job.id}')">
                  <div class="text-[11px] font-bold text-slate-200 leading-tight mb-1 group-hover:text-blue-400 transition-colors">${escapeHtml(job.title)}</div>
-                 <div class="text-[9px] text-slate-500 uppercase font-medium">${new Date(job.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                 <div class="text-[9px] text-slate-400 uppercase font-medium">
+                    <span class="text-blue-400 font-bold mr-1">${escapeHtml(job.source || 'Unknown')}</span>
+                    ${new Date(job.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                 </div>
              </div>
              <button onclick="playSummary('${job.id}')" class="p-2 bg-slate-800 rounded-full group-hover:bg-green-500/20 transition-all">
                 <span class="material-icons-round text-green-500 text-lg">play_arrow</span>
              </button>
              <button onclick="deleteSummary(event, '${job.id}')" class="p-2 ml-1 rounded-full hover:bg-red-500/20 transition-all">
-                <span class="material-icons-round text-slate-600 hover:text-red-500 text-lg">delete_outline</span>
-             </button>
+                <span class="material-icons-round text-slate-400 hover:text-red-500 text-lg">delete_outline</span>
+              </button>
           </div>
-        `).join('')}
+        `;
+  }).join('')}
       </div>
     </div>` : '';
 
@@ -1571,7 +1586,7 @@ async function renderReader() {
     
     // V148.0: Intercept Summary for Menu
     if (type === 'summarize') {
-        showSummaryMenu(card.dataset.link, card.dataset.relatedLinks, card.dataset.title);
+        showSummaryMenu(card.dataset.link, card.dataset.relatedLinks, card.dataset.title, card.dataset.source);
         return;
     }
 
@@ -1585,7 +1600,7 @@ async function renderReader() {
   }
 
   // V148.1: Smart Summary Menu (Refactored for Reliability)
-  function showSummaryMenu(link, relatedLinks, title) {
+  function showSummaryMenu(link, relatedLinks, title, source) {
       const existing = document.getElementById('summaryMenuOverlay');
       if (existing) existing.remove();
 
@@ -1597,6 +1612,7 @@ async function renderReader() {
       menu.dataset.link = link;
       menu.dataset.related = relatedLinks || '';
       menu.dataset.title = title || '';
+      menu.dataset.source = source || ''; // Store source
 
       menu.innerHTML = \`
         <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-[85%] max-w-sm shadow-2xl transform scale-100 transition-all">
@@ -1639,7 +1655,7 @@ async function renderReader() {
           btn.addEventListener('click', (e) => {
               e.stopPropagation(); // Stop bubbling
               const mode = btn.dataset.mode;
-              triggerSummary(menu.dataset.link, menu.dataset.related, mode, menu.dataset.title);
+              triggerSummary(menu.dataset.link, menu.dataset.related, mode, menu.dataset.title, menu.dataset.source);
           });
       });
 
@@ -1648,7 +1664,7 @@ async function renderReader() {
       });
   }
 
-  function triggerSummary(link, relatedLinks, mode, title) {
+  function triggerSummary(link, relatedLinks, mode, title, source) {
       const menu = document.getElementById('summaryMenuOverlay');
       if (menu) menu.remove();
       
@@ -1657,8 +1673,10 @@ async function renderReader() {
       if (relatedLinks && relatedLinks !== 'undefined' && relatedLinks !== 'null' && relatedLinks !== '') {
           extra = '&readLinks=' + relatedLinks;
       }
-      // Pass the MODE and TITLE to the script
-      window.location.href = '${scriptUrl}?summarize=' + encodeURIComponent(link) + '&mode=' + mode + '&title=' + encodeURIComponent(title) + '&search=' + search + '&page=${PAGE}' + extra;
+      const prevCat = "${args.queryParameters.prevCat || ''}";
+      const prevCatParam = prevCat ? '&prevCat=' + encodeURIComponent(prevCat) : '';
+      // Pass the MODE, TITLE, and SOURCE to the script
+      window.location.href = '${scriptUrl}?summarize=' + encodeURIComponent(link) + '&mode=' + mode + '&title=' + encodeURIComponent(title) + '&source=' + encodeURIComponent(source) + '&search=' + search + '&page=${PAGE}' + extra + prevCatParam;
   }
   
   // V140.1: Debounce search input - immediate UI feedback, delayed filtering
