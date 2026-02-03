@@ -1,14 +1,35 @@
-# 📝 Vibe Coding Todo List
+# 📝 Project To-Do List
 
-## 🚀 High Priority (Immediate)
-- [ ] **AI Summary Tuning:** Testing "Paragraph Chunking" (One-Paragraph-Per-Chunk) to solve retention.
-- [ ] **AI Hallucinations:** Monitor if Paragraph Chunking eliminates mid-sentence artifacts.
-- [x] **UI Update (Header):** Replaced "Play All" with "Refresh All" button (Sync Icon). Triggers `?refresh=true`.
-- [ ] **Search Bar Polish:** 
-    - Ensure 'X' (Clear) button appears when Pulse Tag is clicked (Pre-filled search).
-    - Auto-clear search if "Bulk Read" results in 0 items (prevent dead end).
-- [ ] **UI Update (Card Actions):** Fix icon spacing on article cards. Currently, 'Fav' and 'Link' can touch on small screens due to `justify-between`. Move ALL icons into a single container with fixed `gap-5` (20px) for consistent layout.
+## 🚀 Active Features (Stable)
+- [x] **Async Polling Architecture:** Validated. 100% Success rate.
+- [x] **Split Summary Modes:**
+    - "Quick Recap" (~20% retention).
+    - "Smart Summary" (~45% retention).
+- [x] **Server Tuning:** Parameter tuning confirmed working.
+- [x] **Logging:** Added `Retention %` to `app.py` logs.
 
-## 🔮 Future Enhancements (V150+)
-- [ ] **Smart Badges:** Use Hugging Face token counts to display "🔥 Long Read" or "⚡ Quick Read" badges on article cards.
-- [ ] **Short Mode Restoration:** Re-introduce distinct "Quick Recap" length logic once the base generation is stable.
+## 🔮 Future Improvements
+- [x] **Async Polling Architecture:** Validated. 100% Success rate on long articles.
+- [x] **Logging:** Added `Retention %` to `app.py` logs.
+- [x] **Shortcut:** "Summarize Article" is fully functional (Async Loop).
+
+## 🔮 V160 NEXT SESSION: In-House Inbox Architecture ("The Green Icon")
+**Goal: Eliminate Shortcut POLLING by using an app-integrated mailbox.**
+
+1.  **Server Upgrades (`app.py`):**
+    *   Create `GET /completed_jobs` endpoint.
+    *   Return list of finished jobs: `[{"id": "...", "title": "..."}]`.
+
+2.  **App Upgrades (`News Reader.js`):**
+    *   **Check Mail:** Poll `/completed_jobs` on refresh/load.
+    *   **UI:** Add "Green Mailbox Icon" to header if jobs > 0.
+    *   **Inbox Menu:** Tap icon -> Show list of summaries.
+    *   **Wiring:** Tap item -> Run "Play Summary" shortcut.
+
+3.  **Shortcut creation:**
+    *   **"Play Summary"**: Input = JobID -> fetch Text -> Speak.
+    *   *Note:* The "Submit" shortcuts are already pruned (IH versions).
+
+## 🚀 Active Features (Stable V150)
+- [ ] **Prompt Tuning:** Refine BART guidelines if "Gibberish" returns.
+- [ ] **Caching:** Redis/Disk cache for `JOBS` if memory gets tight.
