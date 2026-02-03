@@ -1,0 +1,31 @@
+# System
+.Trash
+.DS_Store
+desktop.ini
+
+# User Data & Cache (Do NOT commit my personal reading history)
+news_cache/
+*.json
+*.txt
+!global_news_feeds.json
+!requirements.txt
+
+# Backups
+*.BACKUP*
+*V150-BACKUP*
+*V116_backup*
+*pre_hugging_backup*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv
+env/
+
+# Editor/Agent
+.agent/
+GEMINI.md
+RULES.md
+TODO.md
+TODO-REFACTOR.md
+TEMP_OBSERVATIONS.md
