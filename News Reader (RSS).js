@@ -2,13 +2,14 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V160.7
-// Status: In-House Inbox Architecture (Read Status & Badge)
+// Version: V162.6
+// Status: In-House Inbox Architecture (Pulse Search Fix)
 // =======================================
 
 const fm = FileManager.iCloud()
 const dir = fm.documentsDirectory()
 const CONFIG_FILE = fm.joinPath(dir, "global_news_feeds.json")
+const BACKUP_CONFIG_FILE = fm.joinPath(dir, "global_news_feeds_BACKUP.json") // V161.6: Safety Net
 const CAT_FILE = fm.joinPath(dir, "global_news_category.txt")
 const PREV_CAT_FILE = fm.joinPath(dir, "prev_category.txt")
 const PREV_PAGE_FILE = fm.joinPath(dir, "prev_page.txt")
@@ -254,6 +255,9 @@ function extract(b, tag) {
       .replace(/&#8221;/g, '"')
       .replace(/&#8211;/g, '-')
       .replace(/&#8212;/g, '--')
+      // V162.0: Generic Entity Decoding (Hex & Decimal)
+      .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
+      .replace(/&#x([0-9a-f]+);/gi, (match, hex) => String.fromCharCode(parseInt(hex, 16)))
 
     return text
   }
@@ -582,8 +586,11 @@ if (args.queryParameters.playSummary) {
     saveHistory(READ_HISTORY)
   }
 
+  // V161.8: Use Digest Logic for Single Items (Unified Intro/Outro)
+  // We reuse the Digest Shortcut which expects a JSON payload.
+  const inputPayload = JSON.stringify({ "job_ids": [jobId] });
   const completionState = encodeURIComponent(`${scriptUrl}?page=${PAGE}`)
-  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Play%20Summary%20IH&input=${jobId}&x-success=${completionState}`)
+  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Play%20Digest%20IH&input=${encodeURIComponent(inputPayload)}&x-success=${completionState}`)
   return
 }
 
@@ -596,6 +603,59 @@ if (args.queryParameters.deleteSummary) {
     req.method = "DELETE";
     await req.loadString();
   } catch (e) { logToFile("Delete Error: " + e.message); }
+
+  Safari.open(`${scriptUrl}?page=${PAGE}`);
+  return;
+}
+
+// V161.0: Play All Unread (Digest)
+if (args.queryParameters.playDigest) {
+  let unreadIds = [];
+  try {
+    const baseUrl = HF_API_URL.replace("/submit", "");
+    const req = new Request(`${baseUrl}/completed_jobs`);
+    const res = await req.loadJSON();
+    const allJobs = res.jobs || [];
+
+    // Filter Unread
+    unreadIds = allJobs.filter(j => !READ_HISTORY.includes(j.id)).map(j => j.id);
+
+    // Mark as Read
+    if (unreadIds.length > 0) {
+      unreadIds.forEach(id => {
+        if (!READ_HISTORY.includes(id)) READ_HISTORY.push(id);
+      });
+      saveHistory(READ_HISTORY);
+    } else {
+      logToFile("[Digest] No unread items found.");
+    }
+  } catch (e) { logToFile("Digest Fetch Error: " + e.message); }
+
+  if (unreadIds.length === 0) {
+    Safari.open(`${scriptUrl}?page=${PAGE}`);
+    return;
+  }
+
+  const inputPayload = JSON.stringify({ "job_ids": unreadIds });
+  const completionState = encodeURIComponent(`${scriptUrl}?page=${PAGE}`);
+  Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Play%20Digest%20IH&input=${encodeURIComponent(inputPayload)}&x-success=${completionState}`);
+  return;
+}
+
+// V161.0: Delete All
+if (args.queryParameters.deleteAll) {
+  try {
+    const baseUrl = HF_API_URL.replace("/submit", "");
+    const req = new Request(`${baseUrl}/completed_jobs`);
+    const res = await req.loadJSON();
+    const allJobs = res.jobs || [];
+
+    for (const job of allJobs) {
+      const delReq = new Request(`${baseUrl}/delete/${job.id}`);
+      delReq.method = "DELETE";
+      await delReq.loadString();
+    }
+  } catch (e) { logToFile("Delete All Error: " + e.message); }
 
   Safari.open(`${scriptUrl}?page=${PAGE}`);
   return;
@@ -1045,12 +1105,30 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
     </button>`;
 
   const inboxMenuHtml = hasMail ? `
-    <div id="inboxMenu" class="hidden fixed top-16 right-4 bg-[#1e293b] border border-blue-500/30 rounded-xl shadow-2xl z-[60] w-96 overflow-hidden ring-1 ring-black/50">
-      <div class="px-4 py-3 border-b border-slate-700 flex justify-between items-center bg-[#0f172a]">
-        <span class="text-xs font-black text-green-400 uppercase tracking-widest flex items-center gap-2"><span class="material-icons-round text-sm">auto_awesome</span> AI Summaries Ready</span>
+    <div id="inboxOverlay" onclick="toggleInbox(event)" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[55] animate-in fade-in duration-200"></div>
+    <div id="inboxMenu" class="hidden fixed top-16 right-4 bg-[#1e293b] border border-blue-500/30 rounded-xl shadow-2xl z-[60] w-96 overflow-hidden ring-1 ring-black/50 animate-in fade-in slide-in-from-top-2">
+      <div class="px-3 py-2.5 border-b border-slate-700 flex justify-between items-center bg-[#0f172a]">
+        <div class="flex items-center gap-2">
+             <span class="text-[10px] font-black text-green-400 uppercase tracking-widest flex items-center gap-1 whitespace-nowrap">
+                <span class="material-icons-round text-xs">newspaper</span> AI SUMMARIES
+             </span>
+             
+             <div class="h-3 w-px bg-slate-700 mx-1"></div>
+             
+             <button onclick="playDigest()" class="text-blue-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 transition-colors mr-1">
+                <span class="material-icons-round text-[16px]">play_circle</span> Play Unread
+             </button>
+             
+             <div class="h-3 w-px bg-slate-700 mx-1"></div>
+
+             <button onclick="deleteAll()" class="text-slate-500 hover:text-red-400 transition-colors ml-1" title="Clear All">
+                <span class="material-icons-round text-[16px]">delete</span>
+             </button>
+        </div>
         <span onclick="toggleInbox(event)" class="material-icons-round text-slate-400 text-sm cursor-pointer hover:text-white">close</span>
       </div>
-      <div class="max-h-[60vh] overflow-y-auto">
+      
+      <div class="max-h-[60vh] overflow-y-auto bg-[#0b1120]">
         ${inboxItems.map(job => {
     const isRead = READ_HISTORY.includes(job.id);
     return `
@@ -1107,7 +1185,6 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
         <button onclick="toggleMenu(event)" class="p-1"><span class="material-icons-round ${showUnreadOnly ? 'text-slate-500' : 'text-red-500'}">more_vert</span></button>
       </div>
     </div>
-    ${inboxMenuHtml}
     <div class="px-4 pb-2 relative">
       <div class="relative flex items-center">
         <span class="material-icons-round absolute left-3 text-slate-500 text-sm">search</span>
@@ -1129,7 +1206,8 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
     <div onclick="window.location.href='${scriptUrl}?state=MANAGER'" class="menu-item"><span class="material-icons-round text-orange-400">tune</span><span>Manage Sources</span></div>
     <div onclick="window.location.href='${scriptUrl}?showLogs=true&page=${page}&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-slate-500">bug_report</span><span>Debug Logs</span></div>
     <div onclick="window.location.href='${scriptUrl}?refresh=true&prevCat=' + encodeURIComponent('${returnSource}')" class="menu-item"><span class="material-icons-round text-slate-400">refresh</span><span>Refresh All</span></div>
-  </div>`;
+  </div>
+  ${inboxMenuHtml}`;
 
 }
 
@@ -1564,15 +1642,42 @@ async function renderReader() {
   const START_IDX = ${startIdx}; const BASE_TOTAL = ${totalCount}; const CLUSTER_HTML = \`${clusterHtml}\`;
   
   function toggleMenu(e) { e.stopPropagation(); const m = document.getElementById('actionMenu'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; document.getElementById('inboxMenu')?.classList.add('hidden'); }
-  function toggleInbox(e) { e.stopPropagation(); const m = document.getElementById('inboxMenu'); if(m) { m.classList.toggle('hidden'); } document.getElementById('actionMenu').style.display = 'none'; }
+  function toggleInbox(e) { 
+      e.stopPropagation(); 
+      const m = document.getElementById('inboxMenu'); 
+      const o = document.getElementById('inboxOverlay');
+      if(m) { m.classList.toggle('hidden'); } 
+      if(o) { o.classList.toggle('hidden'); }
+      document.getElementById('actionMenu').style.display = 'none'; 
+  }
   function playSummary(jobId) { window.location.href = '${scriptUrl}?playSummary=' + encodeURIComponent(jobId) + '&page=${PAGE}'; }
   function deleteSummary(e, jobId) { e.stopPropagation(); const row = e.target.closest('.group'); if(row) row.style.display = 'none'; window.location.href = '${scriptUrl}?deleteSummary=' + encodeURIComponent(jobId) + '&page=${PAGE}'; }
+  
+  function playDigest() {
+      // Find unread items (Server Logic: sending IDs allow server to stitch them)
+      // Client Logic: We must filter valid unread items from the rendered list. 
+      // But we can't easily access 'inboxItems' here in the HTML unless we serialized it.
+      // Wait, renderReaderHeader injected HTML, but didn't serialize the list for JS.
+      // Easy Fix: We iterate the DOM elements which have the ID.
+      // Actually, better: Pass the unread IDs via a simple fetch from the Render Step?
+      // No, simplest: Reload with ?playDigest=true and let Scriptable handle the filtering because Scriptable has the Full Data.
+      window.location.href = '${scriptUrl}?playDigest=true&page=${PAGE}'; 
+  }
+
+  function deleteAll() {
+      // Direct Action (No Confirm - confirm() is flaky in WebView)
+      window.location.href = '${scriptUrl}?deleteAll=true&page=${PAGE}';
+  }
 
   window.addEventListener('click', () => { 
     document.getElementById('actionMenu').style.display = 'none'; 
     document.getElementById('inboxMenu')?.classList.add('hidden');
   });
-  function setPulseSearch(tag) { document.getElementById('searchInput').value = tag; filterNews(); }
+  function setPulseSearch(tag) { 
+    document.getElementById('searchInput').value = tag; 
+    document.getElementById('clearSearch').classList.remove('hidden'); 
+    filterNews(); 
+  }
   function openTagEditor(targetMode, explicitPage) {
     const pulseData = encodeURIComponent(JSON.stringify(${JSON.stringify(pulseTagsList)}));
     const mode = targetMode || 'exclude';
@@ -1773,6 +1878,18 @@ async function renderReader() {
       bar.classList.remove('flex'); 
     } 
   }
+
+  // V162.1: Auto-Clear Search Logic
+  window.onload = () => {
+     const query = document.getElementById('searchInput').value;
+     if(query) {
+         filterNews(); // Apply filter on load
+         const visible = document.querySelectorAll('.news-card:not(.hidden-card)').length;
+         if(visible === 0) {
+             window.location.href = '${scriptUrl}?page=${PAGE}';
+         }
+     }
+  };
   
   // V143.0 Refactor: Consolidated Bulk Logic
   function collectBulkSelection() {
@@ -2052,6 +2169,32 @@ async function renderTagEditor() {
       
       updatePreview();
       updateButtonStates();
+  // V162.2: Auto-Clear Search Logic & Clear Button Persistence
+  window.onload = () => {
+     const query = document.getElementById('searchInput').value;
+     
+  // V162.5: Auto-Clear Search Logic & Clear Button Persistence
+  window.onload = () => {
+     const input = document.getElementById('searchInput');
+     const query = input.value;
+     
+     // 1. Force Clear Button Visibility based on value presence
+     const clearBtn = document.getElementById('clearSearch');
+     if (query && query.length > 0) { 
+         clearBtn.classList.remove('hidden'); 
+     } else { 
+         clearBtn.classList.add('hidden'); 
+     }
+
+     // 2. Auto-Clear Logic (if 0 results)
+     if(query) {
+         filterNews(); 
+         const visible = document.querySelectorAll('.news-card:not(.hidden-card)').length;
+         if(visible === 0) {
+             window.location.href = '${scriptUrl}?page=${PAGE}';
+         }
+     }
+  };
     </script>
   </body></html>`
   const wv = new WebView(); await wv.loadHTML(html); await wv.present();
@@ -2106,6 +2249,7 @@ async function renderManager() {
   const sortedFeeds = [...favorites, ...regular]
 
   fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS))
+  fm.writeString(BACKUP_CONFIG_FILE, JSON.stringify(FEEDS)) // V161.6: Auto-Backup on Edit
 
   let html = `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>body { background-color: #0f172a; color: #f1f5f9; }</style></head><body class="p-4"><div class="flex justify-between items-center mb-6"><h1 class="text-lg font-bold text-orange-400 uppercase">Manage Feeds</h1><a href="${scriptUrl}?clearValidation=true" class="text-slate-400 material-icons-round">close</a></div><div class="bg-slate-900 p-4 rounded-xl border border-slate-800 mb-6 space-y-2"><input id="n" type="text" placeholder="Feed Name" class="w-full bg-slate-800 rounded p-2 text-sm outline-none border border-transparent focus:border-orange-500 text-slate-100"><input id="u" type="text" placeholder="RSS URL" class="w-full bg-slate-800 rounded p-2 text-sm outline-none border border-transparent focus:border-orange-500 text-slate-100"><button onclick="let n=document.getElementById('n').value; let u=document.getElementById('u').value; if(n&&u) window.location.href='${scriptUrl}?addFeed=true&name='+encodeURIComponent(n)+'&url='+encodeURIComponent(u)" class="w-full bg-orange-600 py-2 rounded font-bold text-sm uppercase text-white">Add Source</button></div>`
 
@@ -2167,12 +2311,12 @@ if (args.queryParameters.addFeed) {
     await generateMasterFeed();
   }
   FEEDS.push({ name: newName, url: newUrl, enabled: true, validation: validation.status, validated: (validation.status === "green"), format: validation.format });
-  fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS)); Safari.open(`${scriptUrl}?state=MANAGER`); return
+  fm.writeString(CONFIG_FILE, JSON.stringify(FEEDS)); fm.writeString(BACKUP_CONFIG_FILE, JSON.stringify(FEEDS)); Safari.open(`${scriptUrl}?state=MANAGER`); return
 }
 
 if (args.queryParameters.clearValidation) {
   const cleanFeeds = FEEDS.map(f => { if (f.validation === "green") delete f.validation; return f; });
-  fm.writeString(CONFIG_FILE, JSON.stringify(cleanFeeds)); Safari.open(`${scriptUrl}?state=MENU`); return
+  fm.writeString(CONFIG_FILE, JSON.stringify(cleanFeeds)); fm.writeString(BACKUP_CONFIG_FILE, JSON.stringify(cleanFeeds)); Safari.open(`${scriptUrl}?state=MENU`); return
 }
 
 if (args.queryParameters.cat) {
@@ -2202,3 +2346,4 @@ else if (APP_STATE === "MANAGER") await renderManager()
 else if (APP_STATE === "TAG_EDITOR") await renderTagEditor()
 
 Script.complete()
+
