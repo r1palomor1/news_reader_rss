@@ -7,7 +7,7 @@ import uuid
 import time
 import threading
 
-# Last Updated: V162.8 In-House Inbox Architecture (Robust & Hardened)
+# Last Updated: V163.0 In-House Inbox Architecture (Selective Playback)
 
 # ==========================================
 # ⚙️ CONFIGURATION (LOCKED - DO NOT TOUCH)
@@ -266,7 +266,7 @@ def process_summarization_job(job_id: str, text: str, mode: str):
 
 @app.get("/")
 def home():
-    return {"status": "Active", "system": "InHouse-Inbox-V162.8"}
+    return {"status": "Active", "system": "InHouse-Inbox-V163.0"}
 
 @app.post("/submit")
 def submit_job(req: SummaryRequest):

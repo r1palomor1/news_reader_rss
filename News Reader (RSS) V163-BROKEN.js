@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V162.8
-// Status: In-House Inbox Architecture (Robust & Hardened)
+// Version: V163.0
+// Status: In-House Inbox Architecture (Selective Playback)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -31,7 +31,7 @@ const MAX_LOG_SIZE = 10000  // Maximum debug log size in characters
 
 // Clustering Algorithm Constants
 const BASE_THRESHOLD = 0.28  // Jaccard similarity threshold for standard titles
-const SHORT_THRESHOLD = 0.20  // Lower threshold for short titles (≤5 tokens)
+const SHORT_THRESHOLD = 0.20  // Lower threshold for short titles (=5 tokens)
 const TIME_WINDOW = 36 * 60 * 60 * 1000  // 36-hour clustering window (ms)
 const HF_API_URL = "https://r1palomor1-news-reader-summarizer.hf.space/submit"
 
@@ -300,12 +300,8 @@ async function fetchSingleFeed(url, name) {
     const itemsRaw = xml.includes("<item") ? xml.split(/<item[^>]*>/).slice(1) : xml.split(/<entry[^>]*>/).slice(1)
     const items = itemsRaw.map(b => {
       // Decode entities in ALL fields during extraction
-      const t = extract(b, "title") || extract(b, "dc:title") || extract(b, "media:title");
-      if (!t) {
-        logToFile(`[Extraction Warning] No title in ${name}. Raw: ${b.substring(0, 100).replace(/\n/g, ' ')}`);
-      }
       return {
-        title: t || "Untitled Article",
+        title: extract(b, "title") || extract(b, "dc:title") || extract(b, "media:title") || "Untitled Article",
         link: extract(b, "link"),
         date: extract(b, "pubDate") || extract(b, "updated") || extract(b, "published"),
         desc: extract(b, "description") || extract(b, "summary") || extract(b, "content"),
@@ -352,7 +348,7 @@ async function syncAllFeeds() {
   const failures = results.filter(r => !r.success && !r.cached);
   if (failures.length > 0) {
     const alert = new Alert()
-    alert.title = "⚠️ Feed Sync Issues"
+    alert.title = "?? Feed Sync Issues"
     alert.message = `${failures.length} feed${failures.length > 1 ? 's' : ''} failed to sync:\n\n${failures.map(f => f.name).join('\n')}\n\nCheck Debug Logs for details.`
     alert.addAction("OK")
     await alert.present()
@@ -621,8 +617,13 @@ if (args.queryParameters.playDigest) {
     const res = await req.loadJSON();
     const allJobs = res.jobs || [];
 
-    // Filter Unread
-    unreadIds = allJobs.filter(j => !READ_HISTORY.includes(j.id)).map(j => j.id);
+    // Filter Unread or Selected
+    if (args.queryParameters.selectedIds) {
+      const selected = args.queryParameters.selectedIds.split(',');
+      unreadIds = allJobs.filter(j => selected.includes(j.id)).map(j => j.id);
+    } else {
+      unreadIds = allJobs.filter(j => !READ_HISTORY.includes(j.id)).map(j => j.id);
+    }
 
     // Mark as Read
     if (unreadIds.length > 0) {
@@ -1093,7 +1094,7 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
   const pulseHtml = pulseTagsList.map(([tag, count]) => {
     const isHot = count >= heatThreshold;
     return `<div onclick="setPulseSearch('${tag}')" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap">
-          <span class="text-[11px] font-bold text-blue-400">${isHot ? '🔥 ' : ''}${tag}</span>
+          <span class="text-[11px] font-bold text-blue-400">${isHot ? '?? ' : ''}${tag}</span>
           <span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span>
         </div>`;
   }).join('');
@@ -1119,7 +1120,7 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
              
              <div class="h-3 w-px bg-slate-700 mx-1"></div>
              
-             <button onclick="playDigest()" class="text-blue-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 transition-colors mr-1">
+             <button id="playDigestBtn" onclick="triggerPlayDigest()" class="text-blue-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 transition-colors mr-1">
                 <span class="material-icons-round text-[16px]">play_circle</span> Play Unread
              </button>
              
@@ -1137,6 +1138,9 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
     const isRead = READ_HISTORY.includes(job.id);
     return `
           <div class="p-3 border-b border-slate-800/50 hover:bg-slate-800 transition-colors flex gap-3 group ${isRead ? 'opacity-40 grayscale-[0.5]' : ''}">
+             <div class="flex items-center justify-center">
+                 <input type="checkbox" onchange="toggleSummarySelection('${job.id}')" class="chk-summary form-checkbox w-3.5 h-3.5 rounded border-slate-600 bg-slate-800/50 text-blue-500 focus:ring-0 focus:ring-offset-0 cursor-pointer">
+             </div>
              <div class="flex-1 cursor-pointer" onclick="playSummary('${job.id}')">
                  <div class="text-[11px] font-bold text-slate-200 leading-tight mb-1 group-hover:text-blue-400 transition-colors">${escapeHtml(job.title)}</div>
                  <div class="text-[9px] text-slate-400 uppercase font-medium">
@@ -1180,7 +1184,7 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
   <header class="fixed top-0 left-0 right-0 z-40 glass">
     <div class="px-5 pt-3 pb-2 flex justify-between items-center">
       <div onclick="window.location.href='${scriptUrl}?state=MENU&search=' + encodeURIComponent(document.getElementById('searchInput').value) + '&page=${page}&prevCat=' + encodeURIComponent('${returnSource}')">
-        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${headerTitle} ▼</h1>
+        <h1 class="text-[14px] font-bold tracking-widest uppercase text-blue-500">${headerTitle} ?</h1>
         <span id="headerSub" class="text-[12px] uppercase font-medium ${showUnreadOnly ? 'text-blue-400' : 'text-red-500 font-bold'}">${headerSubText}</span>
       </div>
       <div class="flex gap-4 items-center">
@@ -1294,7 +1298,7 @@ async function renderReader() {
       matches.forEach(phrase => {
         let clean = phrase.trim().replace(/[.:,;]$/, "").replace(/'s$/i, "");
 
-        // CHECK BLACKLIST FIRST (before pluralization) to prevent "This" → "Thi"
+        // CHECK BLACKLIST FIRST (before pluralization) to prevent "This" ? "Thi"
         if (blacklist.has(clean) || userExclusions.has(clean) || clean.length < 3) return;
 
         // THEN do pluralization
@@ -1657,15 +1661,36 @@ async function renderReader() {
   function playSummary(jobId) { window.location.href = '${scriptUrl}?playSummary=' + encodeURIComponent(jobId) + '&page=${PAGE}'; }
   function deleteSummary(e, jobId) { e.stopPropagation(); const row = e.target.closest('.group'); if(row) row.style.display = 'none'; window.location.href = '${scriptUrl}?deleteSummary=' + encodeURIComponent(jobId) + '&page=${PAGE}'; }
   
-  function playDigest() {
-      // Find unread items (Server Logic: sending IDs allow server to stitch them)
-      // Client Logic: We must filter valid unread items from the rendered list. 
-      // But we can't easily access 'inboxItems' here in the HTML unless we serialized it.
-      // Wait, renderReaderHeader injected HTML, but didn't serialize the list for JS.
-      // Easy Fix: We iterate the DOM elements which have the ID.
-      // Actually, better: Pass the unread IDs via a simple fetch from the Render Step?
-      // No, simplest: Reload with ?playDigest=true and let Scriptable handle the filtering because Scriptable has the Full Data.
-      window.location.href = '${scriptUrl}?playDigest=true&page=${PAGE}'; 
+  // V163.0: Selective Playback Logic
+  let selectedSummaryIds = new Set();
+
+  function toggleSummarySelection(id) {
+    if (selectedSummaryIds.has(id)) {
+      selectedSummaryIds.delete(id);
+    } else {
+      selectedSummaryIds.add(id);
+    }
+    updatePlayDigestButton();
+  }
+
+  function updatePlayDigestButton() {
+    const btn = document.getElementById('playDigestBtn');
+    if (!btn) return;
+    
+    if (selectedSummaryIds.size > 0) {
+      btn.innerHTML = `<span class="material-icons-round text-[16px]">play_circle</span> Play Selected(${ selectedSummaryIds.size })`;
+    } else {
+      btn.innerHTML = `<span class="material-icons-round text-[16px]">play_circle</span> Play Unread`;
+    }
+  }
+
+  function triggerPlayDigest() {
+    let url = '${scriptUrl}?playDigest=true&page=${PAGE}';
+    if (selectedSummaryIds.size > 0) {
+      const ids = Array.from(selectedSummaryIds).join(',');
+      url += '&selectedIds=' + encodeURIComponent(ids);
+    }
+    window.location.href = url;
   }
 
   function deleteAll() {
@@ -2056,7 +2081,7 @@ async function renderTagEditor() {
       <div class="flex overflow-x-auto gap-2 pb-2" style="scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;">
         ${pulseTagsList.map(([tag, count]) => {
     const isHot = count >= heatThreshold;
-    return `<a href="${scriptUrl}?addPulseTag=true&type=${mode}&tag=${encodeURIComponent(tag)}" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap"><span class="text-[11px] font-bold text-blue-400">${isHot ? '🔥 ' : ''}${tag}</span><span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span></a>`
+    return `<a href="${scriptUrl}?addPulseTag=true&type=${mode}&tag=${encodeURIComponent(tag)}" class="pulse-pill bg-slate-800/40 border ${isHot ? 'border-blue-500/50' : 'border-slate-700'} px-3 py-1.5 rounded-full flex items-center gap-1.5 whitespace-nowrap"><span class="text-[11px] font-bold text-blue-400">${isHot ? '?? ' : ''}${tag}</span><span class="text-[10px] bg-slate-700 text-slate-400 px-1.5 rounded-md font-bold">${count}</span></a>`
   }).join('')}
       </div>
     </div>` : ''}
@@ -2226,10 +2251,10 @@ async function renderMenu() {
   <body>
     <header class="fixed top-0 left-0 right-0 z-40 bg-slate-900 border-b border-slate-800 px-5 py-4 flex justify-between items-center"><h1 class="text-sm font-bold tracking-widest uppercase text-slate-400">Select Source</h1><a href="${scriptUrl}?state=MANAGER" class="p-2 bg-slate-800 rounded-full border border-orange-500/50"><span class="material-icons-round text-orange-400">tune</span></a></header>
     <main class="pt-24 px-4 space-y-3 pb-10">
-      <div onclick="window.location.href='${scriptUrl}?cat=FAVORITES&prevPage=${PAGE}'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold text-yellow-500 border border-yellow-500/20"><span>⭐ FAVORITES</span><span>${FAVORITES.length}</span></div>
-      <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevPage=${PAGE}'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold text-orange-500 border border-orange-500/20"><span>🔖 READ LATER</span><span>${BOOKMARKS.length}</span></div>
-      <div onclick="window.location.href='${scriptUrl}?cat=ALL+SOURCES'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold"><span>🌟 ALL SOURCES ${anyGlobalNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span>${totalSum}</span></div>
-      ${sortedCounts.map(res => `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(res.name)}'" class="p-4 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-center"><span class="text-slate-300 flex items-center">${res.favorite ? '⭐ ' : ''}${res.name} ${res.hasNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span class="text-slate-400">${res.count}</span></div>`).join('')}
+      <div onclick="window.location.href='${scriptUrl}?cat=FAVORITES&prevPage=${PAGE}'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold text-yellow-500 border border-yellow-500/20"><span>? FAVORITES</span><span>${FAVORITES.length}</span></div>
+      <div onclick="window.location.href='${scriptUrl}?cat=BOOKMARKS&prevPage=${PAGE}'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold text-orange-500 border border-orange-500/20"><span>?? READ LATER</span><span>${BOOKMARKS.length}</span></div>
+      <div onclick="window.location.href='${scriptUrl}?cat=ALL+SOURCES'" class="p-4 bg-slate-800 shadow-sm rounded-xl flex justify-between font-bold"><span>?? ALL SOURCES ${anyGlobalNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span>${totalSum}</span></div>
+      ${sortedCounts.map(res => `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(res.name)}'" class="p-4 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-center"><span class="text-slate-300 flex items-center">${res.favorite ? '? ' : ''}${res.name} ${res.hasNew ? '<span class="ml-2 text-[8px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full">NEW</span>' : ''}</span><span class="text-slate-400">${res.count}</span></div>`).join('')}
     </main>
   </body></html>`
   const wv = new WebView(); await wv.loadHTML(html); await wv.present();
@@ -2259,12 +2284,12 @@ async function renderManager() {
 
   // Favorites section
   if (favorites.length > 0) {
-    html += `<div class="mb-4"><h2 class="text-xs font-bold text-blue-400 uppercase mb-2 px-2">Favorites ⭐</h2><div class="space-y-2">`
+    html += `<div class="mb-4"><h2 class="text-xs font-bold text-blue-400 uppercase mb-2 px-2">Favorites ?</h2><div class="space-y-2">`
     favorites.forEach(f => {
       const originalIdx = FEEDS.indexOf(f)
       let borderClass = f.validation === "red" ? "border-red-500 border-2" : (f.validation === "green" ? "border-green-500 border-2" : "border-slate-800")
       let formatLabel = f.format ? `<span class="text-[10px] font-black px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 mr-2">[${f.format}]</span>` : ""
-      html += `<div class="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border transition-all duration-300 ${borderClass}"><div class="flex-1 truncate pr-4 ${f.enabled ? 'text-slate-100' : 'text-slate-500'}"><span class="text-sm font-medium">⭐ ${f.name}</span> <div class="mt-1">${formatLabel}</div></div><div class="flex items-center space-x-4 shrink-0"><a href="${scriptUrl}?state=MANAGER&idx=${originalIdx}&edit=true" class="material-icons-round text-orange-400 text-xl">edit</a><a href="${scriptUrl}?state=MANAGER&idx=${originalIdx}&delete=true" class="material-icons-round text-red-500 text-xl">delete</a></div></div>`
+      html += `<div class="flex items-center justify-between p-3 bg-slate-800/50 rounded-lg border transition-all duration-300 ${borderClass}"><div class="flex-1 truncate pr-4 ${f.enabled ? 'text-slate-100' : 'text-slate-500'}"><span class="text-sm font-medium">? ${f.name}</span> <div class="mt-1">${formatLabel}</div></div><div class="flex items-center space-x-4 shrink-0"><a href="${scriptUrl}?state=MANAGER&idx=${originalIdx}&edit=true" class="material-icons-round text-orange-400 text-xl">edit</a><a href="${scriptUrl}?state=MANAGER&idx=${originalIdx}&delete=true" class="material-icons-round text-red-500 text-xl">delete</a></div></div>`
     })
     html += `</div></div>`
   }
