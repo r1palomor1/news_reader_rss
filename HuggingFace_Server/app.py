@@ -7,7 +7,7 @@ import uuid
 import time
 import threading
 
-# Last Updated: V160.7 In-House Inbox Architecture (Read Status Sync)
+# Last Updated: V162.6 In-House Inbox Architecture (Pulse Search Fix)
 
 # ==========================================
 # ⚙️ CONFIGURATION (LOCKED - DO NOT TOUCH)
@@ -50,6 +50,9 @@ class SummaryRequest(BaseModel):
     mode: str = "half"  # "half" (Smart) or "short" (Quick)
     title: str = "Untitled Article"  # Article title for inbox display
     source: str = "Unknown" # Article source for inbox display
+
+class DigestRequest(BaseModel):
+    job_ids: list[str]
 
 def clean_sentence_end(text: str) -> str:
     """ENSURE AUDIO SAFETY: REC 3 - Smarter cleanup that removes AI artifacting."""
@@ -238,7 +241,7 @@ def chunk_and_summarize(text: str, mode: str = "half") -> str:
     return clean_sentence_end(final_raw)
 
 # ==========================================
-# � ASYNC INFRASTRUCTURE
+#  ASYNC INFRASTRUCTURE
 # ==========================================
 JOBS = {} 
 
@@ -263,7 +266,7 @@ def process_summarization_job(job_id: str, text: str, mode: str):
 
 @app.get("/")
 def home():
-    return {"status": "Active", "system": "InHouse-Inbox-V160.7"}
+    return {"status": "Active", "system": "InHouse-Inbox-V162.6"}
 
 @app.post("/submit")
 def submit_job(req: SummaryRequest):
@@ -290,6 +293,7 @@ def submit_job(req: SummaryRequest):
     
     print(f"--- JOB SUBMITTED: {job_id} ---", flush=True)
     print(f"Title: {req.title}", flush=True)
+    print(f"Source: {req.source}", flush=True)
     print(f"Mode: {req.mode}", flush=True)
     return {"job_id": job_id, "status": "processing"}
 
@@ -334,6 +338,36 @@ def get_completed_jobs():
     # Sort by oldest first (reading queue order)
     completed.sort(key=lambda x: x["timestamp"])
     return {"jobs": completed, "count": len(completed)}
+
+@app.post("/digest")
+def generate_digest(req: DigestRequest):
+    """
+    DAILY BRIEFING: Stitches multiple job outputs into one script.
+    """
+    combined_script = "Here is your Audio Briefing. "
+    count = 0
+    
+    # Sort ids to verify order? No, trust the client order.
+    for i, job_id in enumerate(req.job_ids):
+        job = JOBS.get(job_id)
+        if job and job["status"] == "done":
+            source = job.get("source", "Unknown Source")
+            title = job.get("title", "Untitled")
+            text = job["output"]
+            
+            if count > 0:
+                combined_script += f"\n\nNext up, from {source}: {title}. \n"
+            else:
+                combined_script += f"Starting with {source}: {title}. \n"
+                
+            combined_script += text
+            count += 1
+            
+    if count == 0:
+        return {"digest": "No processed summaries found."}
+        
+    combined_script += "\n\nThat concludes your briefing."
+    return {"digest": combined_script}
     
 # Legacy endpoint (Synchronous) for backward compatibility testing
 @app.post("/summarize")
