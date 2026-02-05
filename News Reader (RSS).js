@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V162.8
-// Status: In-House Inbox Architecture (Robust & Hardened)
+// Version: V163.4
+// Status: Bulk Action Metadata Fixes
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -612,54 +612,79 @@ if (args.queryParameters.deleteSummary) {
   return;
 }
 
-// V161.0: Play All Unread (Digest)
+// V163.0: Selective Playback (Inbox) - Includes Manual & Auto
 if (args.queryParameters.playDigest) {
-  let unreadIds = [];
-  try {
-    const baseUrl = HF_API_URL.replace("/submit", "");
-    const req = new Request(`${baseUrl}/completed_jobs`);
-    const res = await req.loadJSON();
-    const allJobs = res.jobs || [];
+  let playIds = [];
 
-    // Filter Unread
-    unreadIds = allJobs.filter(j => !READ_HISTORY.includes(j.id)).map(j => j.id);
+  // If specific IDs are requested (Selective Play), use them
+  if (args.queryParameters.ids) {
+    playIds = args.queryParameters.ids.split(',').filter(x => x.length > 0);
+    logToFile(`[Digest] Selective Playback: ${playIds.length} items selected.`);
+  } else {
+    // Default: Fetch ALL server jobs and filter for Unread
+    try {
+      const baseUrl = HF_API_URL.replace("/submit", "");
+      const req = new Request(`${baseUrl}/completed_jobs`);
+      const res = await req.loadJSON();
+      const allJobs = res.jobs || [];
 
-    // Mark as Read
-    if (unreadIds.length > 0) {
-      unreadIds.forEach(id => {
-        if (!READ_HISTORY.includes(id)) READ_HISTORY.push(id);
-      });
-      saveHistory(READ_HISTORY);
-    } else {
-      logToFile("[Digest] No unread items found.");
-    }
-  } catch (e) { logToFile("Digest Fetch Error: " + e.message); }
+      // Filter Unread
+      playIds = allJobs.filter(j => !READ_HISTORY.includes(j.id)).map(j => j.id);
+    } catch (e) { logToFile("Digest Fetch Error: " + e.message); }
+  }
 
-  if (unreadIds.length === 0) {
+  // Common Logic: Mark as Read & Create Payload
+  if (playIds.length > 0) {
+    let historyChanged = false;
+    playIds.forEach(id => {
+      if (!READ_HISTORY.includes(id)) {
+        READ_HISTORY.push(id);
+        historyChanged = true;
+      }
+    });
+    if (historyChanged) saveHistory(READ_HISTORY);
+  } else {
+    logToFile("[Digest] No items to display/play.");
+  }
+
+  // If empty, just return
+  if (playIds.length === 0) {
     Safari.open(`${scriptUrl}?page=${PAGE}`);
     return;
   }
 
-  const inputPayload = JSON.stringify({ "job_ids": unreadIds });
+  // Hand off to IOS Shortcut
+  const inputPayload = JSON.stringify({ "job_ids": playIds });
   const completionState = encodeURIComponent(`${scriptUrl}?page=${PAGE}`);
   Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Play%20Digest%20IH&input=${encodeURIComponent(inputPayload)}&x-success=${completionState}`);
   return;
 }
 
 // V161.0: Delete All
+// V163.2: Smart Delete (All or Selected)
 if (args.queryParameters.deleteAll) {
   try {
     const baseUrl = HF_API_URL.replace("/submit", "");
-    const req = new Request(`${baseUrl}/completed_jobs`);
-    const res = await req.loadJSON();
-    const allJobs = res.jobs || [];
 
-    for (const job of allJobs) {
-      const delReq = new Request(`${baseUrl}/delete/${job.id}`);
+    // Check if specific IDs are provided
+    let idsToDelete = [];
+    if (args.queryParameters.ids) {
+      idsToDelete = args.queryParameters.ids.split(',').filter(x => x.length > 0);
+    } else {
+      // Fetch ALL for full wipe
+      const req = new Request(`${baseUrl}/completed_jobs`);
+      const res = await req.loadJSON();
+      idsToDelete = (res.jobs || []).map(j => j.id);
+    }
+
+    // Execute Deletions
+    for (const id of idsToDelete) {
+      const delReq = new Request(`${baseUrl}/delete/${id}`);
       delReq.method = "DELETE";
       await delReq.loadString();
     }
-  } catch (e) { logToFile("Delete All Error: " + e.message); }
+
+  } catch (e) { logToFile("Delete Logic Error: " + e.message); }
 
   Safari.open(`${scriptUrl}?page=${PAGE}`);
   return;
@@ -732,7 +757,10 @@ if (args.queryParameters.summarize) {
     // Quick Recap V160: Route to "Summarize Quick IH" with Dictionary
     const title = args.queryParameters.title || "Unknown Title"
     const source = args.queryParameters.source || "Unknown Source"
-    logToFile(`[JS-DEBUG] Summarize Title: ${title}`);
+
+    if (title === "Unknown Title" || source === "Unknown Source") {
+      logToFile(`[WARN] Unknown Metadata in Quick Recap | Title: ${title} | Source: ${source}`);
+    }
     const inputDict = JSON.stringify({ url: url, title: title, source: source })
 
     const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
@@ -743,6 +771,9 @@ if (args.queryParameters.summarize) {
     // Smart Summary V160: Route to "Summarize Article IH" with Dictionary
     const title = args.queryParameters.title || "Unknown Title"
     const source = args.queryParameters.source || "Unknown Source"
+    if (title === "Unknown Title" || source === "Unknown Source") {
+      logToFile(`[WARN] Unknown Metadata in Smart Summary | Title: ${title} | Source: ${source}`);
+    }
     const inputDict = JSON.stringify({ url: url, title: title, source: source })
 
     const prevCatParam = args.queryParameters.prevCat ? `&prevCat=${encodeURIComponent(args.queryParameters.prevCat)}` : '';
@@ -1119,13 +1150,13 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
              
              <div class="h-3 w-px bg-slate-700 mx-1"></div>
              
-             <button onclick="playDigest()" class="text-blue-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 transition-colors mr-1">
+             <button id="inboxPlayBtn" onclick="playDigest()" class="text-blue-400 hover:text-white text-[9px] font-bold uppercase flex items-center gap-1 transition-colors mr-1">
                 <span class="material-icons-round text-[16px]">play_circle</span> Play Unread
              </button>
              
              <div class="h-3 w-px bg-slate-700 mx-1"></div>
 
-             <button onclick="deleteAll()" class="text-slate-500 hover:text-red-400 transition-colors ml-1" title="Clear All">
+             <button id="inboxDeleteBtn" onclick="deleteAll()" class="text-slate-500 hover:text-red-400 transition-colors ml-1" title="Clear All">
                 <span class="material-icons-round text-[16px]">delete</span>
              </button>
         </div>
@@ -1137,6 +1168,9 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
     const isRead = READ_HISTORY.includes(job.id);
     return `
           <div class="p-3 border-b border-slate-800/50 hover:bg-slate-800 transition-colors flex gap-3 group ${isRead ? 'opacity-40 grayscale-[0.5]' : ''}">
+             <div class="flex items-center">
+                 <input type="checkbox" onclick="event.stopPropagation()" class="inbox-check w-4 h-4 border border-slate-500 rounded bg-slate-900 checked:bg-blue-500 checked:border-blue-500 focus:ring-0 mr-2 cursor-pointer appearance-none" data-id="${job.id}" onchange="updateInboxAction()">
+             </div>
              <div class="flex-1 cursor-pointer" onclick="playSummary('${job.id}')">
                  <div class="text-[11px] font-bold text-slate-200 leading-tight mb-1 group-hover:text-blue-400 transition-colors">${escapeHtml(job.title)}</div>
                  <div class="text-[9px] text-slate-400 uppercase font-medium">
@@ -1164,7 +1198,7 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
     returnBtnHtml = `<div onclick="window.location.href='${scriptUrl}?cat=${encodeURIComponent(validP)}'" class="menu-item"><span class="material-icons-round text-blue-400">arrow_back</span><span>Return</span></div>`;
   }
 
-  return `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>
+  return `<!DOCTYPE html><html class="dark"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/><script src="https://cdn.tailwindcss.com"></script><script>function updateInboxAction(){const c=document.querySelectorAll('.inbox-check:checked');const b=document.getElementById('inboxPlayBtn');const d=document.getElementById('inboxDeleteBtn');if(!b)return;if(c.length>0){const ids=Array.from(c).map(i=>i.getAttribute('data-id')).join(',');b.innerHTML='<span class="material-icons-round text-[16px]">play_circle</span> Play Selected ('+c.length+')';b.onclick=()=>window.location.href='${scriptUrl}?playDigest=true&ids='+encodeURIComponent(ids);d.onclick=()=>window.location.href='${scriptUrl}?deleteAll=true&ids='+encodeURIComponent(ids);d.classList.add('text-red-500');d.classList.remove('text-slate-500')}else{b.innerHTML='<span class="material-icons-round text-[16px]">play_circle</span> Play Unread';b.onclick=()=>playDigest();d.onclick=()=>deleteAll();d.classList.add('text-slate-500');d.classList.remove('text-red-500')}}</script><link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet"/><style>
   body { font-family: ui-sans-serif; background-color: #0f172a; color: #f1f5f9; -webkit-user-select: none; scroll-behavior: smooth; } 
   .glass { backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); background: rgba(15, 23, 42, 0.85); border-bottom: 1px solid #1e293b; } 
   .hidden-card { display: none !important; }
@@ -1692,20 +1726,24 @@ async function renderReader() {
   function handleSwipe(evt, el) { if (!xDown || !yDown) return; let xDiff = xDown - evt.changedTouches[0].clientX; let yDiff = yDown - evt.changedTouches[0].clientY; if (Math.abs(xDiff) > 80 && Math.abs(xDiff) > Math.abs(yDiff)) executeAction(el, xDiff > 0 ? 'bookmark' : 'check'); xDown = null; yDown = null; }
   function executeAction(el, type) { 
     const card = el.closest('.news-card'); 
+    const link = card.getAttribute('data-link');
+    const title = card.getAttribute('data-title') || 'Unknown Title';
+    const source = card.getAttribute('data-source') || 'Unknown Source';
+    const related = card.getAttribute('data-related-links');
     
     // V148.0: Intercept Summary for Menu
     if (type === 'summarize') {
-        showSummaryMenu(card.dataset.link, card.dataset.relatedLinks, card.dataset.title, card.dataset.source);
+        showSummaryMenu(link, related, title, source);
         return;
     }
 
     const search = encodeURIComponent(document.getElementById('searchInput').value); 
     let extra = '';
-    if ((type === 'listen' || type === 'bookmark') && card.dataset.relatedLinks) {
-       extra = '&readLinks=' + card.dataset.relatedLinks;
+    if ((type === 'listen' || type === 'bookmark') && related) {
+       extra = '&readLinks=' + related;
     }
-    const params = 'search=' + search + '&page=${PAGE}&title=' + encodeURIComponent(card.dataset.title) + '&source=' + encodeURIComponent(card.dataset.source) + '&date=' + encodeURIComponent(card.dataset.date) + '&desc=' + encodeURIComponent(card.dataset.desc); 
-    window.location.href = '${scriptUrl}?' + type + '=' + encodeURIComponent(card.dataset.link) + '&' + params + extra; 
+    const params = 'search=' + search + '&page=${PAGE}&title=' + encodeURIComponent(title) + '&source=' + encodeURIComponent(source) + '&date=' + encodeURIComponent(card.getAttribute('data-date')) + '&desc=' + encodeURIComponent(card.getAttribute('data-desc')); 
+    window.location.href = '${scriptUrl}?' + type + '=' + encodeURIComponent(link) + '&' + params + extra; 
   }
 
   // V148.1: Smart Summary Menu (Refactored for Reliability)
@@ -1784,8 +1822,12 @@ async function renderReader() {
       }
       const prevCat = "${args.queryParameters.prevCat || ''}";
       const prevCatParam = prevCat ? '&prevCat=' + encodeURIComponent(prevCat) : '';
-      // Pass the MODE, TITLE, and SOURCE to the script
-      window.location.href = '${scriptUrl}?summarize=' + encodeURIComponent(link) + '&mode=' + mode + '&title=' + encodeURIComponent(title) + '&source=' + encodeURIComponent(source) + '&search=' + search + '&page=${PAGE}' + extra + prevCatParam;
+      
+      // V163.3: Robust Encoding for Title/Source
+      const safeTitle = encodeURIComponent(title || 'Unknown Title');
+      const safeSource = encodeURIComponent(source || 'Unknown Source');
+      
+      window.location.href = '${scriptUrl}?summarize=' + encodeURIComponent(link) + '&mode=' + mode + '&title=' + safeTitle + '&source=' + safeSource + '&search=' + search + '&page=${PAGE}' + extra + prevCatParam;
   }
   
   // V140.1: Debounce search input - immediate UI feedback, delayed filtering
@@ -1904,16 +1946,22 @@ async function renderReader() {
     checked.forEach(cb => {
       const isChild = cb.classList.contains('child-check');
       const card = cb.closest('.news-card');
-      const d = isChild ? cb.dataset : card.dataset;
+      // V163.4: Robust getAttribute usage
+      const target = isChild ? cb : card;
+      
+      const link = target.getAttribute('data-link');
+      const title = target.getAttribute('data-title') || 'Unknown Title';
+      const source = target.getAttribute('data-source') || 'Unknown Source';
+      const related = !isChild ? card.getAttribute('data-related-links') : null;
       
       // Add the explicitly selected item
       items.push({
-        link: d.link,
-        title: d.title,
-        source: d.source,
-        date: d.date,
+        link: link,
+        title: title,
+        source: source,
+        date: target.getAttribute('data-date'),
         isChild: isChild,
-        relatedLinks: !isChild && card.dataset.relatedLinks ? card.dataset.relatedLinks : null
+        relatedLinks: related
       });
     });
     return items;
@@ -1950,7 +1998,7 @@ async function renderReader() {
     
     // V149.3: Single Item = Open Menu (Smart/Full/Quick)
     if (items.length === 1) {
-       showSummaryMenu(items[0].link, items[0].relatedLinks);
+       showSummaryMenu(items[0].link, items[0].relatedLinks, items[0].title, items[0].source);
        return;
     }
     
