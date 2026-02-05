@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V163.7
-// Status: Action Bar Polish (Spacing & Icon Cycle)
+// Version: V163.8
+// Status: Layout Fix & Scroll Stability
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -1506,8 +1506,6 @@ async function renderReader() {
             </div>
             <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10 cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(p.link)}${searchParam}&page=${PAGE}'">${escapeHtml(p.title)}</h2>
             
-            <div class="flex items-center justify-between pb-3 mt-3 border-b border-slate-700/50">
-              <div class="flex gap-6">
             <div class="flex items-center justify-between pb-3 mt-3 border-b border-slate-700/50">
               <div class="flex gap-5">
                 <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
