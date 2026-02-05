@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V163.4
-// Status: Bulk Action Metadata Fixes
+// Version: V163.7
+// Status: Action Bar Polish (Spacing & Icon Cycle)
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -1462,6 +1462,10 @@ async function renderReader() {
     // Headers removed for Split Source UI 
     const header = '';
 
+    // V163.7: Icon Cycle Protocol (A/B/C Test)
+    const linkIcons = ['open_in_new', 'public', 'read_more'];
+    const linkIcon = linkIcons[idx % linkIcons.length];
+
     // V145.2 Fix: Filter children BEFORE deciding card type
     let validChildren = [];
     if (item.type === 'cluster') {
@@ -1487,10 +1491,8 @@ async function renderReader() {
       const isChildSaved = validChildren.some(r => BOOKMARKS.some(b => b.link === r.link));
       const viewCoverageColor = isChildSaved ? 'text-orange-500 font-bold' : 'text-indigo-400';
 
-      // Aggregate Sources (Use validChildren)
-      const sources = [p.source, ...validChildren.map(r => r.source)];
-      const uniqueSources = [...new Set(sources)];
-      const sourceLabel = uniqueSources.length > 1 ? `${uniqueSources.length} SOURCES` : p.source;
+      // V163.5: Always show Parent Source (ignore # Sources count)
+      const sourceLabel = p.source;
 
       return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-indigo-500/80 shadow-lg transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(p.title.toLowerCase())}" data-link="${p.link}" data-title="${escapeHtml(p.title)}" data-source="${escapeHtml(p.source)}" data-date="${p.date}" data-desc="${escapeHtml(p.desc || '')}" data-related-links="${encodeURIComponent(JSON.stringify(validChildren.map(r => r.link)))}" data-related-items="${encodeURIComponent(JSON.stringify(validChildren))}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
           <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
@@ -1506,12 +1508,14 @@ async function renderReader() {
             
             <div class="flex items-center justify-between pb-3 mt-3 border-b border-slate-700/50">
               <div class="flex gap-6">
+            <div class="flex items-center justify-between pb-3 mt-3 border-b border-slate-700/50">
+              <div class="flex gap-5">
                 <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
                 <div onclick="event.stopPropagation(); executeAction(this, 'summarize')" class="flex items-center gap-1.5"><span class="material-icons-round text-base text-slate-400">auto_awesome</span><span class="text-[12px] font-bold uppercase text-slate-400">AI</span></div>
                 <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isSaved ? 'text-orange-500' : 'text-slate-400'}">${isSaved ? 'bookmark' : 'bookmark_border'}</span><span class="text-[10px] font-bold uppercase ${isSaved ? 'text-orange-500' : 'text-slate-400'} whitespace-nowrap">Read Later</span></div>
                 <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
+                <div class="text-slate-400 flex items-center"><a href="${scriptUrl}?externalLink=${encodeURIComponent(p.link)}${searchParam}&page=${PAGE}" class="material-icons-round text-xl transition-colors">${linkIcon}</a></div>
               </div>
-              <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(p.link)}${searchParam}&page=${PAGE}" class="material-icons-round text-xl">link</a></div>
             </div>
             
             <!-- Accordion Details (Moved to Bottom) -->
@@ -1575,13 +1579,13 @@ async function renderReader() {
         <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10 cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(item.link)}${searchParam}&page=${PAGE}'">${escapeHtml(item.title)}</h2>
         <p class="text-[13px] text-slate-400 mt-1 leading-snug line-clamp-2 pr-4">${escapeHtml(item.desc || '')}</p>
         <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
-          <div class="flex gap-6">
+          <div class="flex gap-5">
             <div onclick="event.stopPropagation(); executeAction(this, '${hasRead ? 'uncheck' : 'listen'}')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'check_circle' : 'volume_up'}</span><span class="text-[12px] font-bold uppercase ${hasRead ? 'text-blue-500' : 'text-slate-400'}">${hasRead ? 'Done' : 'Listen'}</span></div>
             <div onclick="event.stopPropagation(); executeAction(this, 'summarize')" class="flex items-center gap-1.5"><span class="material-icons-round text-base text-slate-400">auto_awesome</span><span class="text-[12px] font-bold uppercase text-slate-400">AI</span></div>
             <div onclick="event.stopPropagation(); executeAction(this, 'bookmark')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${bookmarkColor}">${bookmarkIcon}</span><span class="text-[10px] font-bold uppercase ${bookmarkLabelColor} whitespace-nowrap">Read Later</span></div>
             <div onclick="event.stopPropagation(); executeAction(this, 'favorite')" class="flex items-center gap-1.5"><span class="material-icons-round text-base ${isFav ? 'text-yellow-400' : 'text-slate-400'}">${isFav ? 'star' : 'star_border'}</span><span class="text-[12px] font-bold uppercase ${isFav ? 'text-yellow-400' : 'text-slate-400'}">Fav</span></div>
+            <div class="text-slate-400 flex items-center"><a href="${scriptUrl}?externalLink=${encodeURIComponent(item.link)}${searchParam}&page=${PAGE}" class="material-icons-round text-xl transition-colors">${linkIcon}</a></div>
           </div>
-          <div class="text-slate-400 p-1 shrink-0"><a href="${scriptUrl}?externalLink=${encodeURIComponent(item.link)}${searchParam}&page=${PAGE}" class="material-icons-round text-xl">link</a></div>
         </div>
       </div>
     </article>`}).join('')}
