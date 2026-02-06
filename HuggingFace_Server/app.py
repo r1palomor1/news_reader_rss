@@ -7,7 +7,7 @@ import uuid
 import time
 import threading
 
-# Last Updated: V163.8 Layout Fix & Scroll Stability (Stable)
+# Last Updated: V164.8 Strict Parent-Based Read Logic (Stable)
 
 # ==========================================
 # ⚙️ CONFIGURATION (LOCKED - DO NOT TOUCH)

@@ -2,8 +2,8 @@
 // These must be at the very top of the file. Do not edit.
 // icon-color: red; icon-glyph: magic;
 // =======================================
-// Version: V163.8
-// Status: Layout Fix & Scroll Stability
+// Version: V164.8
+// Status: Strict Parent-Based Read Logic
 // =======================================
 
 const fm = FileManager.iCloud()
@@ -26,7 +26,7 @@ const EXCLUSION_FILE = fm.joinPath(dir, "tag_exclusions.txt")
 const INCLUSION_FILE = fm.joinPath(dir, "tag_inclusions.txt")
 
 // Configuration Constants
-const MAX_HISTORY = 250  // Maximum read history items to retain
+const MAX_HISTORY = 1000 // Minimum floor, scales dynamically  // Maximum read history items to retain
 const MAX_LOG_SIZE = 10000  // Maximum debug log size in characters
 
 // Clustering Algorithm Constants
@@ -61,7 +61,12 @@ function saveTags(path, tags) {
 }
 
 function saveHistory(arr) {
-  const trimmed = arr.slice(-MAX_HISTORY)  // Keep only most recent items
+  // Dynamic Cap: Max of Floor(1000) OR 1.5x Current Feed Volume
+  let cap = MAX_HISTORY
+  if (typeof CACHED_ITEMS !== 'undefined' && Array.isArray(CACHED_ITEMS)) {
+    cap = Math.max(cap, Math.ceil(CACHED_ITEMS.length * 1.5))
+  }
+  const trimmed = arr.slice(-cap)  // Keep only most recent items based on dynamic cap
   fm.writeString(HISTORY_FILE, JSON.stringify(trimmed))
 }
 function saveBookmarks(arr) { fm.writeString(BOOKMARK_FILE, JSON.stringify(arr)) }
@@ -490,6 +495,7 @@ if (args.queryParameters.playall) {
 
     readLinks.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) });
     saveHistory(READ_HISTORY);
+    await new Promise(r => Timer.schedule(500, false, r));
 
     const callback = encodeURIComponent(`${scriptUrl}?page=${PAGE}${searchParam}`);
     Safari.open(`shortcuts://x-callback-url/run-shortcut?name=Read%20Article&input=${encodeURIComponent(urls)}&x-success=${callback}`);
@@ -501,8 +507,19 @@ if (args.queryParameters.playall) {
 
 if (args.queryParameters.bulkRead) {
   const links = JSON.parse(decodeURIComponent(args.queryParameters.bulkRead))
-  links.forEach(l => { if (!READ_HISTORY.includes(l)) READ_HISTORY.push(l) })
-  saveHistory(READ_HISTORY); Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE); return
+  logToFile(`[BulkRead] Rec'd ${links.length} links. History Size: ${READ_HISTORY.length}`)
+  let added = 0;
+  links.forEach(l => {
+    if (!READ_HISTORY.includes(l)) {
+      READ_HISTORY.push(l)
+      added++;
+    }
+  })
+  logToFile(`[BulkRead] Added ${added} new items. New History Size: ${READ_HISTORY.length}`)
+  saveHistory(READ_HISTORY);
+  await new Promise(r => Timer.schedule(500, false, r));
+  Safari.open(scriptUrl + '?' + searchParam + '&page=' + PAGE);
+  return
 }
 
 if (args.queryParameters.refresh) {
@@ -704,7 +721,8 @@ if (args.queryParameters.listen) {
   }
 
   // Handling History - Add if not already read
-  const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : [url];
+  let readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : [];
+  if (!readLinks.includes(url)) readLinks.push(url);
   readLinks.forEach(link => {
     const isFav = FAVORITES.some(f => f.link === link);
     if (!isFav && !READ_HISTORY.includes(link)) {
@@ -712,6 +730,7 @@ if (args.queryParameters.listen) {
     }
   });
   saveHistory(READ_HISTORY)
+  await new Promise(r => Timer.schedule(500, false, r));
 
   // Always play - clear callback to avoid loops
   // Update: Pass FULL State (Category + PrevCat)
@@ -735,7 +754,8 @@ if (args.queryParameters.summarize) {
   }
 
   // Handling History - Add if not already read
-  const readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : [url];
+  let readLinks = args.queryParameters.readLinks ? JSON.parse(args.queryParameters.readLinks) : [];
+  if (!readLinks.includes(url)) readLinks.push(url);
   readLinks.forEach(link => {
     const isFav = FAVORITES.some(f => f.link === link);
     if (!isFav && !READ_HISTORY.includes(link)) {
@@ -743,6 +763,7 @@ if (args.queryParameters.summarize) {
     }
   });
   saveHistory(READ_HISTORY)
+  await new Promise(r => Timer.schedule(500, false, r));
 
   // V149.0: Smart Shortcut Protocol
   // Check if we already have the summary mode from the UI menu
@@ -1171,8 +1192,8 @@ async function renderReaderHeader(scriptUrl, page, searchTerm, returnSource, hea
              <div class="flex items-center">
                  <input type="checkbox" onclick="event.stopPropagation()" class="inbox-check w-4 h-4 border border-slate-500 rounded bg-slate-900 checked:bg-blue-500 checked:border-blue-500 focus:ring-0 mr-2 cursor-pointer appearance-none" data-id="${job.id}" onchange="updateInboxAction()">
              </div>
-             <div class="flex-1 cursor-pointer" onclick="playSummary('${job.id}')">
-                 <div class="text-[11px] font-bold text-slate-200 leading-tight mb-1 group-hover:text-blue-400 transition-colors">${escapeHtml(job.title)}</div>
+             <div class="flex-1">
+                 <div class="text-[11px] font-bold text-slate-200 leading-tight mb-1 transition-colors">${escapeHtml(job.title)}</div>
                  <div class="text-[9px] text-slate-400 uppercase font-medium">
                     <span class="text-blue-400 font-bold mr-1">${escapeHtml(job.source || 'Unknown')}</span>
                     ${new Date(job.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -1366,8 +1387,20 @@ async function renderReader() {
 
   // V118.1: If ALL SOURCES, items are ALREADY clustered in the file.
   if (CATEGORY === "ALL SOURCES") {
-    let rawPool = (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") ? CACHED_ITEMS.filter(i => !READ_HISTORY.includes(i.link)) : CACHED_ITEMS;
-    filteredPool = rawPool; // Data is already {type: 'cluster', ...}
+    if (SHOW_UNREAD_ONLY && CATEGORY !== "BOOKMARKS") {
+      filteredPool = CACHED_ITEMS.filter(entity => {
+        if (entity.type === 'cluster') {
+          const mainUnread = !READ_HISTORY.includes(entity.link);
+          const hasUnreadRelated = entity.relatedItems && entity.relatedItems.some(r => !READ_HISTORY.includes(r.link));
+          // V164.8: Parent is King - Only check mainUnread
+          return mainUnread;
+        } else {
+          return !READ_HISTORY.includes(entity.link);
+        }
+      });
+    } else {
+      filteredPool = CACHED_ITEMS;
+    }
     logToFile(`[Render] Using Pre-Clustered Master File: ${filteredPool.length} entities.`);
   } else {
     // V139.3: Lazy clustering cache for single sources
@@ -1396,7 +1429,8 @@ async function renderReader() {
           if (entity.type === 'cluster') {
             const mainUnread = !READ_HISTORY.includes(entity.link);
             const hasUnreadRelated = entity.relatedItems && entity.relatedItems.some(r => !READ_HISTORY.includes(r.link));
-            return mainUnread || hasUnreadRelated;
+            // V164.8: Parent is King - Only check mainUnread
+            return mainUnread;
           } else {
             return !READ_HISTORY.includes(entity.link);
           }
@@ -1463,8 +1497,8 @@ async function renderReader() {
     const header = '';
 
     // V163.7: Icon Cycle Protocol (A/B/C Test)
-    const linkIcons = ['open_in_new', 'public', 'read_more'];
-    const linkIcon = linkIcons[idx % linkIcons.length];
+    // V164.6: Standardized Link Icon
+    const linkIcon = 'open_in_new';
 
     // V145.2 Fix: Filter children BEFORE deciding card type
     let validChildren = [];
@@ -1482,6 +1516,7 @@ async function renderReader() {
       const p = item.primaryItem;
       const count = validChildren.length;
       // V144.2 Fix: Never dim items in Read Later (Bookmarks) view
+      // V164.8: Revert to Parent-Only check (Parent is King)
       const hasRead = READ_HISTORY.includes(p.link) && CATEGORY !== 'BOOKMARKS';
       const isSaved = BOOKMARKS.some(b => b.link === p.link);
       const isFav = FAVORITES.some(f => f.link === p.link);
@@ -1495,7 +1530,7 @@ async function renderReader() {
       const sourceLabel = p.source;
 
       return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-indigo-500/80 shadow-lg transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(p.title.toLowerCase())}" data-link="${p.link}" data-title="${escapeHtml(p.title)}" data-source="${escapeHtml(p.source)}" data-date="${p.date}" data-desc="${escapeHtml(p.desc || '')}" data-related-links="${encodeURIComponent(JSON.stringify(validChildren.map(r => r.link)))}" data-related-items="${encodeURIComponent(JSON.stringify(validChildren))}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
-          <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
+          <div class="absolute top-4 right-4 z-20"><div class="p-4 -m-4 cursor-pointer" onclick="this.querySelector('input').click(); event.stopPropagation()"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()" onclick="event.stopPropagation()"></div></div>
           <div class="px-4 pt-4 pb-2">
             <div class="flex justify-between items-baseline mb-1.5">
               <div class="flex items-center gap-2">
@@ -1504,7 +1539,7 @@ async function renderReader() {
               </div>
               <span class="text-[12px] font-medium text-slate-400 uppercase mr-10">${formatDateTime(p.date)}</span>
             </div>
-            <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10 cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(p.link)}${searchParam}&page=${PAGE}'">${escapeHtml(p.title)}</h2>
+            <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10">${escapeHtml(p.title)}</h2>
             
             <div class="flex items-center justify-between pb-3 mt-3 border-b border-slate-700/50">
               <div class="flex gap-5">
@@ -1568,13 +1603,13 @@ async function renderReader() {
     const bookmarkLabelColor = (isSaved || isChildSaved) ? 'text-orange-500' : 'text-slate-400';
 
     return header + `<article class="news-card relative bg-[#1e293b] rounded-xl border border-slate-800 transition-all ${hasRead ? 'opacity-40' : ''}" data-search="${escapeHtml(item.title.toLowerCase())}" data-link="${item.link}" data-title="${escapeHtml(item.title)}" data-source="${escapeHtml(item.source)}" data-date="${item.date}" data-desc="${escapeHtml(item.desc || '')}" data-related-links="${item.relatedLinks || ''}" data-index="${idx}" ontouchstart="handleTouchStart(event)" ontouchend="handleSwipe(event, this)">
-      <div class="absolute top-4 right-4 z-10"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()"></div>
+      <div class="absolute top-4 right-4 z-20"><div class="p-4 -m-4 cursor-pointer" onclick="this.querySelector('input').click(); event.stopPropagation()"><input type="checkbox" class="bulk-check parent-check" onchange="updateBulkBar()" onclick="event.stopPropagation()"></div></div>
       <div class="px-4 pt-4 pb-2">
         <div class="flex justify-between items-baseline mb-1.5">
           <div class="flex items-center gap-2"><span class="text-[12px] font-bold uppercase text-blue-500">${escapeHtml(item.source)}</span>${isNew ? '<span class="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded font-black tracking-tighter">NEW</span>' : ''}</div>
           <span class="text-[12px] font-medium text-slate-400 uppercase mr-10">${formatDateTime(item.date)}</span>
         </div>
-        <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10 cursor-pointer" onclick="window.location.href='${scriptUrl}?externalLink=${encodeURIComponent(item.link)}${searchParam}&page=${PAGE}'">${escapeHtml(item.title)}</h2>
+        <h2 class="text-[15px] font-semibold leading-tight text-slate-100 pr-10">${escapeHtml(item.title)}</h2>
         <p class="text-[13px] text-slate-400 mt-1 leading-snug line-clamp-2 pr-4">${escapeHtml(item.desc || '')}</p>
         <div class="flex items-center justify-between pt-2 mt-2 border-t border-slate-800/50">
           <div class="flex gap-5">
